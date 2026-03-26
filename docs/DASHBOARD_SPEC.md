@@ -47,47 +47,60 @@ The goal is to give the remote cofounder a **professional, data-rich command cen
 
 ## 2. Architecture Overview
 
+### Unified Full-Stack App (Hosted on Manus.im)
+
+The entire application — both the Python/FastAPI backend AND the React/Next.js frontend — runs as a **single unified application** hosted on Manus.im. There is no separate backend server to manage.
+
 ```
-┌──────────────────────────────────────────────────────┐
-│  Frontend (Next.js / React)                          │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐            │
-│  │ Dashboard │ │ Map View │ │ Pipeline │  ...pages  │
-│  └─────┬────┘ └─────┬────┘ └─────┬────┘            │
-│        │            │            │                   │
-│        ▼            ▼            ▼                   │
-│  ┌──────────────────────────────────────────────┐   │
-│  │  API Client Layer (fetch / SWR / React Query) │   │
-│  └──────────────────────┬───────────────────────┘   │
-└─────────────────────────┼────────────────────────────┘
-                          │ HTTP REST + WebSocket
-                          ▼
-┌──────────────────────────────────────────────────────┐
-│  Backend: secureflex-intel (FastAPI)                  │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐            │
-│  │ /api/map │ │/api/tend.│ │/api/pipe.│  ...routes │
-│  └─────┬────┘ └─────┬────┘ └─────┬────┘            │
-│        │            │            │                   │
-│        ▼            ▼            ▼                   │
-│  ┌──────────────────────────────────────────────┐   │
-│  │  Intelligence Sources                         │   │
-│  │  • Contracts Finder OCDS API                  │   │
-│  │  • Companies House API                        │   │
-│  │  • Google News RSS                            │   │
-│  │  • Met Police Crime API                       │   │
-│  │  • Pipeline CSV / Database                    │   │
-│  └──────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│  MANUS.IM HOSTED APPLICATION (Single Deployment)                 │
+│                                                                  │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │  FastAPI Server (Python) — serves EVERYTHING               │ │
+│  │                                                            │ │
+│  │  Static Files: /                                           │ │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐                  │ │
+│  │  │ index.html│ │ /map     │ │/pipeline │  ...React SPA   │ │
+│  │  └──────────┘ └──────────┘ └──────────┘                  │ │
+│  │                                                            │ │
+│  │  API Routes: /api/*                                        │ │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐                  │ │
+│  │  │ /api/map │ │/api/tend.│ │/api/pipe.│  ...REST API     │ │
+│  │  └─────┬────┘ └─────┬────┘ └─────┬────┘                  │ │
+│  │        │            │            │                         │ │
+│  │        ▼            ▼            ▼                         │ │
+│  │  ┌──────────────────────────────────────────────────┐     │ │
+│  │  │  Intelligence Engine (secureflex_intel)            │     │ │
+│  │  │  • Contracts Finder OCDS API (tenders)            │     │ │
+│  │  │  • Companies House API (prospects, competitors)   │     │ │
+│  │  │  • Google News RSS (signals)                      │     │ │
+│  │  │  • Met Police Crime API (crime data)              │     │ │
+│  │  │  • SQLite / CSV (pipeline data)                   │     │ │
+│  │  └──────────────────────────────────────────────────┘     │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  Single URL: https://secureflex-intel.manus.im (or custom)       │
+│  Single process, single port, zero DevOps                        │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+### How It Works
+1. **FastAPI** serves the React/Next.js frontend as static files at `/`
+2. **FastAPI** serves the REST API at `/api/*`
+3. The frontend calls `/api/...` endpoints (same origin — no CORS issues)
+4. Everything runs on one server, one port, one URL
+5. **Manus.im** handles deployment, hosting, HTTPS, and domain
 
 ### Backend (Already Built)
 - **Repo:** https://github.com/PKaartinen/secureflex-intel
 - **Server:** `python -m secureflex_intel serve` (FastAPI on port 8000)
-- **Docs:** Auto-generated at `http://localhost:8000/docs` (Swagger UI)
+- **Docs:** Auto-generated at `/docs` (Swagger UI)
 
-### Frontend (To Be Built)
-- React/Next.js SPA connecting to the backend API
+### Frontend (To Be Built by Manus)
+- React SPA or Next.js static export
+- Built React app served by FastAPI's `StaticFiles` mount
 - Map powered by Mapbox GL JS or Leaflet
-- Real-time updates via polling or WebSocket
+- Same-origin API calls (no separate backend needed)
 
 ---
 
@@ -905,63 +918,115 @@ Sidebar width: 280px
 
 ---
 
-## 9. Deployment
+## 9. Deployment on Manus.im
 
-### Phase 1: Local Development
+### Architecture: Single Unified Application
+
+Everything — the Python intelligence backend AND the React frontend — deploys as **one application** on Manus.im. No separate servers, no CORS, no reverse proxy.
+
+### How It Works
+
+1. **FastAPI** serves the built React frontend as static files at `/`
+2. **FastAPI** serves the REST API at `/api/*`
+3. All on one origin, one process, one URL
+
+### Project Structure for Unified Deployment
+```
+secureflex-intel/
+├── secureflex_intel/           # Python backend (already built)
+│   ├── api/server.py           # FastAPI app with API routes
+│   ├── sources/                # Intelligence modules
+│   └── config.py               # Settings
+├── frontend/                   # React frontend (Manus builds this)
+│   ├── src/
+│   │   ├── pages/              # 11 pages from Section 4
+│   │   ├── components/         # Reusable UI components
+│   │   └── lib/api.ts          # API client (calls /api/*)
+│   ├── public/
+│   └── package.json
+├── static/                     # Built frontend output (auto-generated)
+│   └── index.html, assets/     # FastAPI serves this at /
+├── requirements.txt            # Python dependencies
+└── start.sh                    # Single startup script
+```
+
+### FastAPI Static File Serving (Add to server.py)
+```python
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+
+# Mount the built React app
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Catch-all: serve React app for any non-API route (SPA routing)
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    """Serve the React SPA for all non-API routes."""
+    file_path = f"static/{full_path}"
+    if os.path.isfile(file_path):
+        return FileResponse(file_path)
+    return FileResponse("static/index.html")  # SPA fallback
+```
+
+### Startup Script (start.sh)
 ```bash
-# Backend
-cd secureflex-intel
+#!/bin/bash
+# Install Python dependencies
 pip install -r requirements.txt
-python -m secureflex_intel serve --port 8000 --reload
 
-# Frontend (in separate terminal)
-cd secureflex-dashboard
-npm install
-npm run dev  # → http://localhost:3000
+# Build the React frontend (if not pre-built)
+cd frontend && npm install && npm run build && cd ..
+
+# Copy built files to static/
+cp -r frontend/dist/* static/ 2>/dev/null || cp -r frontend/build/* static/ 2>/dev/null || true
+
+# Start the unified server
+python -m secureflex_intel serve --host 0.0.0.0 --port 8080
 ```
 
-### Phase 2: Single Server (VPS)
-```bash
-# Deploy both on a single VPS (DigitalOcean, Railway, Render)
-# Backend: gunicorn + uvicorn workers
-# Frontend: Next.js standalone build
-# Reverse proxy: nginx or Caddy
-```
-
-### Phase 3: Cloud (Production)
-```
-Backend:   Railway / Render / Fly.io (Python)
-Frontend:  Vercel (Next.js — free tier)
-Database:  Supabase (replace CSV with PostgreSQL)
-Cron:      GitHub Actions or Railway cron for scheduled scans
-Auth:      NextAuth.js (protect the dashboard)
-```
-
-### Environment Variables (Production)
+### Environment Variables (Set in Manus.im)
 ```env
-COMPANIES_HOUSE_API_KEY=xxx
-DATABASE_URL=postgresql://...
-NEXTAUTH_SECRET=xxx
-API_BASE_URL=https://api.secureflex-intel.com
+COMPANIES_HOUSE_API_KEY=dff1f09f-...     # UK Companies House API
+OPENAI_API_KEY=sk-...                     # Optional: for AI-enhanced briefs
+PORT=8080                                  # Manus default port
 ```
+
+### What Manus.im Provides
+- **Hosting** — Runs the Python process with the React app bundled in
+- **HTTPS** — Automatic SSL certificate
+- **Domain** — `secureflex-intel.manus.im` or custom domain
+- **Persistence** — File storage for scan results and pipeline data
+- **Zero DevOps** — No Docker, no nginx, no cloud config needed
 
 ---
 
-## Summary: What to Give Manus AI
+## 10. Instructions for Manus AI
 
-When you share this spec with Manus AI to build the dashboard, provide:
+### Give Manus This Prompt:
 
-1. **This document** — Complete specification with every page, feature, and data model
-2. **The GitHub repo** — https://github.com/PKaartinen/secureflex-intel
-3. **API documentation** — Tell Manus to run `python -m secureflex_intel serve` and open `http://localhost:8000/docs` for interactive Swagger docs
-4. **Sample data** — The backend already has real scan data in `data/output/` from test runs
+> Build a full-stack security intelligence command center web application.
+>
+> **Backend:** Already built in Python/FastAPI. Clone from https://github.com/PKaartinen/secureflex-intel
+>
+> **Frontend:** Build a React SPA (Vite or Next.js static export) with these requirements:
+> - **11 pages** as specified in the DASHBOARD_SPEC.md (in the repo under docs/)
+> - **Dark theme** command center aesthetic (shadcn/ui + Tailwind CSS)
+> - **Interactive map** using Mapbox GL JS or Leaflet with GeoJSON layers
+> - **Charts** using Recharts or Tremor for analytics
+> - **TanStack Query** for data fetching with auto-refresh polling
+> - Connect to the FastAPI backend at the same origin (`/api/*`)
+>
+> **Deployment:** Serve everything as one app — FastAPI serves the built React app as static files AND the API endpoints. Single process, single port.
+>
+> **API Docs:** Run `pip install -r requirements.txt && python -m secureflex_intel serve` and check `/docs` for interactive Swagger UI showing all available endpoints.
+>
+> The full page-by-page specification with wireframes, data models, and component details is in `docs/DASHBOARD_SPEC.md` in the repo.
 
-### Key Instructions for Manus AI
-- Build a Next.js 14+ app with shadcn/ui and Tailwind CSS dark theme
-- Connect to the FastAPI backend at `http://localhost:8000`
-- Use the GeoJSON endpoints for map layers (Mapbox GL JS or Leaflet)
-- Implement all 11 pages described in Section 4
-- Use TanStack Query for data fetching with polling
-- Make it look like a professional intelligence command center
-- Every card/table should be clickable with detail views
-- Include a working map with toggleable layers
+### Key Details for Manus
+1. **GitHub Repo:** https://github.com/PKaartinen/secureflex-intel (private — grant access if needed)
+2. **Backend is complete** — 20+ API endpoints, GeoJSON, scan triggers all working
+3. **API is self-documenting** — Swagger UI at `/docs` shows every endpoint with request/response schemas
+4. **Sample data exists** — Run `python -m secureflex_intel tenders` and `python -m secureflex_intel prospects` to generate live data
+5. **Companies House API key** — Set as `COMPANIES_HOUSE_API_KEY` environment variable
+6. **Single deployment** — Both frontend and backend must run as one application on Manus.im, not as separate services
+7. **No separate backend URL** — Frontend calls `/api/*` directly (same origin)
