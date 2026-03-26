@@ -1,0 +1,9 @@
+# Core dependencies (no external packages needed for CLI tools)
+python-dotenv>=0.19
+
+# Server dependencies (needed for: python -m secureflex_intel serve)
+fastapi>=0.100
+uvicorn[standard]>=0.20
+
+# Optional
+pyyaml>=6.0

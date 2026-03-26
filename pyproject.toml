@@ -1,0 +1,21 @@
+[project]
+name = "secureflex-intel"
+version = "0.1.0"
+description = "SecureFlex Intelligence Platform — Automated lead generation for security companies"
+requires-python = ">=3.8"
+dependencies = [
+    "python-dotenv>=0.19",
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "httpx>=0.24",
+]
+yaml = [
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+sf-intel = "secureflex_intel.cli:main"
