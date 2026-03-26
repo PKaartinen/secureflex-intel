@@ -1,0 +1,48 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: #0a0a0f;
+  color: #f9fafb;
+  font-family: "Inter", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #111827; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+/* Leaflet map overrides for dark theme */
+.leaflet-container { background: #0d1117 !important; }
+.leaflet-tile { filter: brightness(0.6) saturate(0.6); }
+.leaflet-control-attribution { background: rgba(17,24,39,0.8) !important; color: #9ca3af !important; font-size: 10px !important; }
+.leaflet-popup-content-wrapper { background: #1f2937 !important; color: #f9fafb !important; border: 1px solid #374151 !important; border-radius: 8px !important; box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important; }
+.leaflet-popup-tip { background: #1f2937 !important; }
+.leaflet-popup-close-button { color: #9ca3af !important; }
+.leaflet-control-zoom a { background: #1f2937 !important; color: #f9fafb !important; border-color: #374151 !important; }
+.leaflet-control-zoom a:hover { background: #374151 !important; }
+
+/* Recharts overrides */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line { stroke: #374151 !important; }
+.recharts-text { fill: #9ca3af !important; }
+.recharts-tooltip-wrapper .recharts-default-tooltip { background: #1f2937 !important; border: 1px solid #374151 !important; border-radius: 6px !important; }
+
+/* Animations */
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+
+@keyframes fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.fade-in { animation: fade-in 0.3s ease-out; }

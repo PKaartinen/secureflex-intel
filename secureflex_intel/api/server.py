@@ -22,7 +22,8 @@ from typing import Optional, List, Dict, Any
 try:
     from fastapi import FastAPI, Query, BackgroundTasks, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import JSONResponse
+    from fastapi.responses import JSONResponse, FileResponse
+    from fastapi.staticfiles import StaticFiles
 except ImportError:
     print("FastAPI not installed. Run: pip install fastapi uvicorn")
     print("Or: pip install secureflex-intel[server]")
@@ -166,7 +167,7 @@ def get_status():
             "tender_region": settings.tender_region,
             "tender_days_back": settings.tender_days_back,
             "prospector_region": settings.prospector_region,
-            "max_results": settings.max_results,
+            "max_results": settings.prospector_max_results,
         },
     }
 
@@ -779,8 +780,39 @@ def _type_to_color(company_type: str) -> str:
     return "#6b7280"  # gray default
 
 
-# ── Entry Point ──────────────────────────────────────────────────────────────
+## ── Static SPA Serving ───────────────────────────────────────────────────────
+_STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 
+if _STATIC_DIR.exists():
+    # Mount assets directory for hashed JS/CSS files
+    _ASSETS_DIR = _STATIC_DIR / "assets"
+    if _ASSETS_DIR.exists():
+        app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="assets")
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    async def favicon():
+        return FileResponse(str(_STATIC_DIR / "favicon.svg"))
+
+    @app.get("/icons.svg", include_in_schema=False)
+    async def icons_svg():
+        f = _STATIC_DIR / "icons.svg"
+        if f.exists():
+            return FileResponse(str(f))
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    # Catch-all SPA route — must be LAST
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        # Don't intercept API routes
+        if full_path.startswith("api/") or full_path in ("docs", "redoc", "openapi.json"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404)
+        index = _STATIC_DIR / "index.html"
+        if index.exists():
+            return FileResponse(str(index))
+        return JSONResponse({"error": "Frontend not built yet. Run: cd frontend && pnpm build"}, status_code=503)
+
+# ── Entry Point ──────────────────────────────────────────────────────────────
 def run_server(host: str = "0.0.0.0", port: int = 8000, reload: bool = False):
     """Start the API server."""
     try:
