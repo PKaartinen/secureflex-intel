@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type Prospect } from '../lib/api'
 import { Card, Button, PageHeader, LoadingSpinner, EmptyState, Table, Th, Td, Tr, Input } from '../components/ui'
 import { formatDate, formatRelativeTime } from '../lib/utils'
-import { Building2, Play, ExternalLink, Search, ChevronLeft, ChevronRight, SlidersHorizontal, X } from 'lucide-react'
+import { Building2, Play, ExternalLink, Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, Globe, MapPin, Hash, Calendar, Briefcase, Shield, FileText } from 'lucide-react'
 
 const COMPANY_TYPES = [
   'All',
@@ -131,8 +131,10 @@ export default function ProspectExplorer() {
     }, {})
   }, [data])
 
+  const typeColor = selectedProspect ? (TYPE_COLORS[selectedProspect.company_type || ''] || '#6b7280') : '#6b7280'
+
   return (
-    <div className="flex flex-col h-full overflow-y-auto">
+    <div className="flex flex-col h-full overflow-hidden">
       <PageHeader
         title="PROSPECT EXPLORER"
         subtitle={data ? `${data.total} companies · Last scan: ${formatRelativeTime(data.last_scan)}` : 'Loading...'}
@@ -154,8 +156,8 @@ export default function ProspectExplorer() {
         }
       />
 
-      <div className="flex flex-1">
-        {/* Sidebar — company type */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left sidebar — company type */}
         <div
           className="flex-shrink-0 border-r p-4 space-y-4 overflow-y-auto"
           style={{ width: 200, background: '#0d1117', borderColor: '#1f2937' }}
@@ -193,7 +195,7 @@ export default function ProspectExplorer() {
           </div>
         </div>
 
-        {/* Main content */}
+        {/* Main content — table */}
         <div className="flex-1 flex flex-col overflow-hidden">
           {/* Advanced filter bar */}
           {showFilters && (
@@ -268,23 +270,24 @@ export default function ProspectExplorer() {
             </div>
           )}
 
-          <div className="flex-1 p-6 space-y-4 overflow-y-auto">
-            {/* Search + pagination info */}
-            <div className="flex items-center gap-3">
-              <div className="relative">
-                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#6b7280' }} />
-                <Input
-                  placeholder="Search name, SIC, CH#..."
-                  value={search}
-                  onChange={e => { setSearch(e.target.value); setOffset(0) }}
-                  className="pl-9 w-72"
-                />
-              </div>
-              <span className="text-xs" style={{ color: '#6b7280' }}>
-                {prospects.length} results · Page {currentPage} of {totalPages || 1}
-              </span>
+          {/* Search + pagination info */}
+          <div className="flex items-center gap-3 px-6 pt-4 pb-2 flex-shrink-0">
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#6b7280' }} />
+              <Input
+                placeholder="Search name, SIC, CH#..."
+                value={search}
+                onChange={e => { setSearch(e.target.value); setOffset(0) }}
+                className="pl-9 w-72"
+              />
             </div>
+            <span className="text-xs" style={{ color: '#6b7280' }}>
+              {prospects.length} results · Page {currentPage} of {totalPages || 1} · click row to inspect
+            </span>
+          </div>
 
+          {/* Table */}
+          <div className="flex-1 overflow-y-auto px-6 pb-4">
             {isLoading ? (
               <LoadingSpinner />
             ) : !prospects.length ? (
@@ -294,7 +297,7 @@ export default function ProspectExplorer() {
                 description="Run a scan to discover prospect companies, or adjust your filters"
               />
             ) : (
-              <Card>
+              <Card className="overflow-hidden">
                 <Table>
                   <thead>
                     <tr>
@@ -309,9 +312,14 @@ export default function ProspectExplorer() {
                   </thead>
                   <tbody>
                     {prospects.map((prospect, i) => {
-                      const typeColor = TYPE_COLORS[prospect.company_type || ''] || '#6b7280'
+                      const tColor = TYPE_COLORS[prospect.company_type || ''] || '#6b7280'
+                      const isSelected = selectedProspect?.company_number === prospect.company_number && selectedProspect?.company_name === prospect.company_name
                       return (
-                        <Tr key={i} onClick={() => setSelectedProspect(prospect)}>
+                        <Tr
+                          key={i}
+                          onClick={() => setSelectedProspect(prospect)}
+                          style={isSelected ? { background: 'rgba(59,130,246,0.08)' } : {}}
+                        >
                           <Td>
                             <div>
                               <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>{prospect.company_name}</p>
@@ -324,9 +332,9 @@ export default function ProspectExplorer() {
                             <span
                               className="text-xs px-2 py-0.5 rounded"
                               style={{
-                                background: `${typeColor}18`,
-                                color: typeColor,
-                                border: `1px solid ${typeColor}33`,
+                                background: `${tColor}18`,
+                                color: tColor,
+                                border: `1px solid ${tColor}33`,
                               }}
                             >
                               {prospect.company_type || 'Unknown'}
@@ -382,7 +390,7 @@ export default function ProspectExplorer() {
 
             {/* Pagination */}
             {totalPages > 1 && (
-              <div className="flex items-center justify-center gap-3">
+              <div className="flex items-center justify-center gap-3 mt-4">
                 <Button size="sm" variant="ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - limit))}>
                   <ChevronLeft size={14} /> Prev
                 </Button>
@@ -392,53 +400,161 @@ export default function ProspectExplorer() {
                 </Button>
               </div>
             )}
+          </div>
+        </div>
 
-            {/* Detail panel */}
-            {selectedProspect && (
-              <Card>
-                <div className="flex items-start justify-between p-4 border-b" style={{ borderColor: '#1f2937' }}>
-                  <div>
-                    <h3 className="text-sm font-semibold" style={{ color: '#f9fafb' }}>{selectedProspect.company_name}</h3>
-                    <p className="text-xs mt-0.5" style={{ color: '#6b7280' }}>
-                      <span
-                        className="px-1.5 py-0.5 rounded mr-2"
-                        style={{
-                          background: `${TYPE_COLORS[selectedProspect.company_type || ''] || '#6b7280'}22`,
-                          color: TYPE_COLORS[selectedProspect.company_type || ''] || '#6b7280',
-                        }}
-                      >
-                        {selectedProspect.company_type}
-                      </span>
-                      {selectedProspect.region}
+        {/* Right: Inspect panel — always visible, shows placeholder when nothing selected */}
+        <div
+          className="flex-shrink-0 border-l flex flex-col overflow-hidden"
+          style={{ width: 380, borderColor: '#1f2937', background: '#0d1117' }}
+        >
+          {selectedProspect ? (
+            <>
+              {/* Detail header */}
+              <div className="flex items-start justify-between px-5 py-4 border-b flex-shrink-0" style={{ borderColor: '#1f2937' }}>
+                <div className="flex-1 min-w-0 pr-3">
+                  <div className="mb-1.5">
+                    <span
+                      className="text-xs px-2 py-0.5 rounded"
+                      style={{
+                        background: `${typeColor}22`,
+                        color: typeColor,
+                        border: `1px solid ${typeColor}33`,
+                      }}
+                    >
+                      {selectedProspect.company_type || 'Unknown'}
+                    </span>
+                  </div>
+                  <h3 className="text-sm font-semibold leading-snug" style={{ color: '#f9fafb' }}>
+                    {selectedProspect.company_name}
+                  </h3>
+                  {selectedProspect.company_number && (
+                    <p className="text-xs font-mono mt-0.5" style={{ color: '#6b7280' }}>
+                      CH#{selectedProspect.company_number}
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => setSelectedProspect(null)}
+                  className="flex-shrink-0 text-xs px-2 py-1 rounded"
+                  style={{ color: '#6b7280', background: 'rgba(255,255,255,0.05)' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* Detail body */}
+              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                {/* Key metrics */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-lg p-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+                    <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Status</p>
+                    <p className="text-sm font-medium" style={{
+                      color: selectedProspect.status === 'Active' ? '#22c55e' :
+                             selectedProspect.status === 'Dissolved' ? '#ef4444' : '#f59e0b'
+                    }}>
+                      {selectedProspect.status || 'Unknown'}
                     </p>
                   </div>
-                  <Button size="sm" variant="ghost" onClick={() => setSelectedProspect(null)}>✕</Button>
-                </div>
-                <div className="p-4 grid grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    {[
-                      ['Companies House #', selectedProspect.company_number],
-                      ['SIC Codes', selectedProspect.sic_codes],
-                      ['Status', selectedProspect.status],
-                      ['Address', selectedProspect.address],
-                      ['Incorporated', formatDate(selectedProspect.date_of_creation)],
-                    ].filter(([, v]) => v).map(([k, v]) => (
-                      <div key={String(k)} className="flex gap-3">
-                        <span className="text-xs w-36 flex-shrink-0" style={{ color: '#6b7280' }}>{k}</span>
-                        <span className="text-xs" style={{ color: '#f9fafb' }}>{v}</span>
-                      </div>
-                    ))}
+                  <div className="rounded-lg p-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+                    <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Score</p>
+                    {selectedProspect.score ? (
+                      <p className="text-sm font-bold" style={{
+                        color: selectedProspect.score >= 70 ? '#22c55e' :
+                               selectedProspect.score >= 40 ? '#f59e0b' : '#6b7280'
+                      }}>
+                        {selectedProspect.score}/100
+                      </p>
+                    ) : (
+                      <p className="text-sm" style={{ color: '#374151' }}>N/A</p>
+                    )}
                   </div>
-                  <div className="flex flex-col gap-2">
+                  <div className="rounded-lg p-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+                    <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Region</p>
+                    <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>
+                      {selectedProspect.region || 'Unknown'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg p-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+                    <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Incorporated</p>
+                    <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>
+                      {formatDate(selectedProspect.date_of_creation) || 'Unknown'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Company details */}
+                <div>
+                  <p className="text-xs uppercase tracking-wider mb-2" style={{ color: '#6b7280' }}>Company Details</p>
+                  <div className="space-y-2.5">
+                    {selectedProspect.sic_codes && (
+                      <div className="flex items-start gap-3">
+                        <Hash size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#374151' }} />
+                        <div>
+                          <p className="text-xs" style={{ color: '#6b7280' }}>SIC Codes</p>
+                          <p className="text-xs font-mono mt-0.5" style={{ color: '#f9fafb' }}>
+                            {selectedProspect.sic_codes}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {selectedProspect.address && (
+                      <div className="flex items-start gap-3">
+                        <MapPin size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#374151' }} />
+                        <div>
+                          <p className="text-xs" style={{ color: '#6b7280' }}>Registered Address</p>
+                          <p className="text-xs mt-0.5" style={{ color: '#f9fafb' }}>
+                            {selectedProspect.address}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {selectedProspect.source && (
+                      <div className="flex items-start gap-3">
+                        <FileText size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#374151' }} />
+                        <div>
+                          <p className="text-xs" style={{ color: '#6b7280' }}>Source</p>
+                          <p className="text-xs mt-0.5" style={{ color: '#f9fafb' }}>
+                            {selectedProspect.source}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Security opportunity assessment */}
+                <div>
+                  <p className="text-xs uppercase tracking-wider mb-2" style={{ color: '#6b7280' }}>Security Opportunity</p>
+                  <div
+                    className="rounded-lg p-3"
+                    style={{ background: '#111827', border: '1px solid #1f2937' }}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Shield size={14} style={{ color: typeColor }} />
+                      <span className="text-xs font-medium" style={{ color: typeColor }}>
+                        {selectedProspect.company_type || 'General'} Sector
+                      </span>
+                    </div>
+                    <p className="text-xs leading-relaxed" style={{ color: '#9ca3af' }}>
+                      {getSecurityInsight(selectedProspect.company_type, selectedProspect.status)}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Action links */}
+                <div>
+                  <p className="text-xs uppercase tracking-wider mb-2" style={{ color: '#6b7280' }}>Actions</p>
+                  <div className="space-y-2">
                     {selectedProspect.company_number && (
                       <a
                         href={`https://find-and-update.company-information.service.gov.uk/company/${selectedProspect.company_number}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-2 justify-center py-2 rounded-lg text-xs"
-                        style={{ background: 'rgba(59,130,246,0.1)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.2)' }}
+                        className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full"
+                        style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}
                       >
-                        <ExternalLink size={12} />
+                        <Briefcase size={14} />
                         View on Companies House
                       </a>
                     )}
@@ -447,10 +563,10 @@ export default function ProspectExplorer() {
                         href={`https://www.linkedin.com/search/results/companies/?keywords=${encodeURIComponent(selectedProspect.company_name)}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-2 justify-center py-2 rounded-lg text-xs"
+                        className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full"
                         style={{ background: 'rgba(10,102,194,0.15)', color: '#60a5fa', border: '1px solid rgba(10,102,194,0.3)' }}
                       >
-                        <ExternalLink size={12} />
+                        <ExternalLink size={14} />
                         Search on LinkedIn
                       </a>
                     )}
@@ -459,20 +575,71 @@ export default function ProspectExplorer() {
                         href={selectedProspect.website_url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex items-center gap-2 justify-center py-2 rounded-lg text-xs"
+                        className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full"
                         style={{ background: 'rgba(34,197,94,0.1)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.2)' }}
                       >
-                        <ExternalLink size={12} />
+                        <Globe size={14} />
                         Visit Website
+                      </a>
+                    )}
+                    {selectedProspect.company_name && (
+                      <a
+                        href={`https://www.google.com/search?q=${encodeURIComponent(selectedProspect.company_name + ' security services')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full"
+                        style={{ background: 'rgba(255,255,255,0.05)', color: '#9ca3af', border: '1px solid #374151' }}
+                      >
+                        <Search size={14} />
+                        Google Security Needs
                       </a>
                     )}
                   </div>
                 </div>
-              </Card>
-            )}
-          </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+              <Building2 size={32} style={{ color: '#374151', marginBottom: 12 }} />
+              <p className="text-sm font-medium" style={{ color: '#4b5563' }}>Select a prospect</p>
+              <p className="text-xs mt-1" style={{ color: '#374151' }}>Click any row to view full company details here</p>
+            </div>
+          )}
         </div>
       </div>
     </div>
   )
+}
+
+/** Generate a contextual security insight based on company type */
+function getSecurityInsight(companyType?: string, status?: string): string {
+  if (status && status !== 'Active') {
+    return `This company is currently ${status?.toLowerCase()}. Verify current operational status before pursuing.`
+  }
+  switch (companyType) {
+    case 'Facilities Management':
+      return 'FM companies often subcontract security services. Strong potential for manned guarding, access control, and CCTV monitoring contracts.'
+    case 'Hotel':
+      return 'Hotels require 24/7 security presence, CCTV monitoring, and guest safety protocols. High-value recurring contract opportunity.'
+    case 'Retail':
+      return 'Retail sites need loss prevention, store detectives, and out-of-hours security patrols. Seasonal demand spikes around holidays.'
+    case 'Healthcare':
+      return 'Healthcare facilities require specialist security with conflict resolution training. Often subject to NHS procurement frameworks.'
+    case 'Education':
+      return 'Educational institutions need campus security, event security, and safeguarding-compliant officers. Often procure via frameworks.'
+    case 'Construction':
+      return 'Construction sites require temporary site security, access control, and plant/material protection. Project-based contracts.'
+    case 'Warehouse/Logistics':
+      return 'Warehouses and logistics centres need perimeter security, access control, and goods-in-transit protection. 24/7 coverage typical.'
+    case 'Corporate':
+      return 'Corporate offices require reception security, access control systems, and executive protection services. Long-term contract potential.'
+    case 'Prime Contractor':
+      return 'Prime contractors manage large-scale security contracts and subcontract to regional providers. Partnership opportunity for local delivery.'
+    case 'Local Authority':
+      return 'Local authorities procure security via public frameworks. Requires compliance with public sector procurement regulations.'
+    case 'Venue/Events':
+      return 'Venues and event spaces need event security, crowd management, and SIA-licensed door supervisors. Mix of recurring and ad-hoc work.'
+    default:
+      return 'Assess this company for potential security service requirements based on their sector and operational profile.'
+  }
 }
