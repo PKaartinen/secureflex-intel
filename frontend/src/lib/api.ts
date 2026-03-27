@@ -24,7 +24,7 @@ export interface StatusResponse {
   status: string
   timestamp: string
   database?: string
-  api_keys: { companies_house: boolean; openai: boolean }
+  api_keys: { companies_house: boolean; openai: boolean; anthropic?: boolean }
   pipeline: { path: string; exists: boolean; lead_count: number }
   data_counts: { tenders: number; prospects: number; competitors?: number; signals: number; briefs: number }
   settings: { tender_region: string; tender_days_back: number; prospector_region: string; max_results: number }
@@ -52,6 +52,40 @@ export interface Lead {
   tags: string
   next_action: string
   next_action_due_date: string
+  next_action_date?: string
+  created_at?: string
+}
+
+export interface LeadCreatePayload {
+  company_name: string
+  company_type?: string
+  company_number?: string
+  sic_codes?: string
+  region?: string
+  address?: string
+  website_url?: string
+  source?: string
+  status?: string
+  tier?: string
+  notes?: string
+  next_action?: string
+  next_action_date?: string
+}
+
+export interface LeadUpdatePayload {
+  company_name?: string
+  company_type?: string
+  company_number?: string
+  sic_codes?: string
+  region?: string
+  address?: string
+  website_url?: string
+  source?: string
+  status?: string
+  tier?: string
+  notes?: string
+  next_action?: string
+  next_action_date?: string
 }
 
 export interface PipelineResponse {
@@ -300,4 +334,22 @@ export const api = {
   scanSignals: () => post<ScanResponse>('/scan/signals'),
 
   scanHistory: () => get<ScanHistoryResponse>('/scan/history'),
+
+  // Pipeline CRUD
+  createLead: (data: LeadCreatePayload) => post<{ status: string; company_id: string; lead: Record<string, string> }>('/pipeline', data),
+  updateLead: (companyId: string, data: LeadUpdatePayload) =>
+    fetch(`${BASE}/pipeline/${companyId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).then(r => { if (!r.ok) throw new Error(`API error ${r.status}`); return r.json() }),
+  deleteLead: (companyId: string) =>
+    fetch(`${BASE}/pipeline/${companyId}`, { method: 'DELETE' })
+      .then(r => { if (!r.ok) throw new Error(`API error ${r.status}`); return r.json() }),
+
+  // AI
+  aiStatus: () => get<{ available: boolean }>('/ai/status'),
+  aiBrief: (companyId: string) => post<{ company_id: string; brief: string }>(`/ai/brief/${companyId}`),
+  aiAnalyzeTender: (tender: Record<string, unknown>) => post<{ analysis: string }>('/ai/analyze/tender', tender),
+  aiAnalyzeProspect: (prospect: Record<string, unknown>) => post<{ analysis: string }>('/ai/analyze/prospect', prospect),
 }

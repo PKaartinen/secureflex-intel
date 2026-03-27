@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSpinner, EmptyState, ScoreBadge, PriorityBadge, Table, Th, Td, Tr } from '../components/ui'
 import { formatDate, formatCurrency, formatRelativeTime } from '../lib/utils'
-import { FileText, Play, ExternalLink, BookOpen } from 'lucide-react'
+import { FileText, Play, ExternalLink, BookOpen, PlusCircle, Sparkles, CheckCircle2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 
 export default function TenderRadar() {
@@ -286,19 +286,26 @@ export default function TenderRadar() {
                   ))}
                 </div>
 
-                {/* CTA */}
-                {selectedTender.link && (
-                  <a
-                    href={String(selectedTender.link)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-sm font-medium w-full"
-                    style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}
-                  >
-                    <ExternalLink size={14} />
-                    View on Contracts Finder
-                  </a>
-                )}
+                {/* AI Analysis */}
+                <TenderAIAnalysis tender={selectedTender} />
+
+                {/* Actions */}
+                <div className="space-y-2">
+                  <p className="text-xs uppercase tracking-wider mb-1.5" style={{ color: '#6b7280' }}>Actions</p>
+                  <AddTenderToPipeline tender={selectedTender} />
+                  {selectedTender.link && (
+                    <a
+                      href={String(selectedTender.link)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-sm font-medium w-full"
+                      style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}
+                    >
+                      <ExternalLink size={14} />
+                      View on Contracts Finder
+                    </a>
+                  )}
+                </div>
               </div>
             </>
           ) : (
@@ -310,6 +317,112 @@ export default function TenderRadar() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+
+/** Add tender to pipeline as a lead */
+function AddTenderToPipeline({ tender }: { tender: Record<string, string | number | boolean | null | undefined> }) {
+  const queryClient = useQueryClient()
+  const [added, setAdded] = useState(false)
+  const [error, setError] = useState('')
+
+  const mutation = useMutation({
+    mutationFn: () => api.createLead({
+      company_name: String(tender.buyer || 'Unknown Buyer'),
+      company_type: 'Tender Lead',
+      region: String(tender.region || ''),
+      source: `Tender: ${String(tender.title || '').slice(0, 80)}`,
+      notes: `Tender score: ${tender.score || 'N/A'}/100 | Classification: ${tender.classification || 'N/A'} | Value: ${tender.value || 'N/A'} | Deadline: ${tender.deadline || 'N/A'} | Link: ${tender.link || 'N/A'}`,
+      status: 'Not Contacted',
+      next_action: 'Review tender and prepare bid response',
+      website_url: String(tender.link || ''),
+    }),
+    onSuccess: () => {
+      setAdded(true)
+      queryClient.invalidateQueries({ queryKey: ['pipeline'] })
+      queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] })
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
+  if (added) {
+    return (
+      <div
+        className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-sm font-medium w-full"
+        style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}
+      >
+        <CheckCircle2 size={14} />
+        Added to Pipeline
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => mutation.mutate()}
+        disabled={mutation.isPending}
+        className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-sm font-medium w-full transition-all"
+        style={{
+          background: 'rgba(34,197,94,0.15)',
+          color: '#22c55e',
+          border: '1px solid rgba(34,197,94,0.3)',
+          opacity: mutation.isPending ? 0.6 : 1,
+        }}
+      >
+        <PlusCircle size={14} />
+        {mutation.isPending ? 'Adding...' : 'Add to Pipeline'}
+      </button>
+      {error && <p className="text-xs text-center" style={{ color: '#ef4444' }}>{error}</p>}
+    </>
+  )
+}
+
+
+/** AI analysis for a tender */
+function TenderAIAnalysis({ tender }: { tender: Record<string, string | number | boolean | null | undefined> }) {
+  const [analysis, setAnalysis] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const runAnalysis = async () => {
+    setLoading(true)
+    try {
+      const result = await api.aiAnalyzeTender(tender as Record<string, unknown>)
+      setAnalysis(result.analysis)
+    } catch {
+      setAnalysis('AI analysis unavailable. Ensure ANTHROPIC_API_KEY is configured.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wider mb-1.5" style={{ color: '#6b7280' }}>AI Analysis</p>
+      {analysis ? (
+        <div className="rounded-lg p-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+          <div className="prose prose-invert prose-xs max-w-none" style={{ color: '#d1d5db', fontSize: '0.75rem', lineHeight: '1.4' }}>
+            <ReactMarkdown>{analysis}</ReactMarkdown>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={runAnalysis}
+          disabled={loading}
+          className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full transition-all"
+          style={{
+            background: 'rgba(168,85,247,0.15)',
+            color: '#a855f7',
+            border: '1px solid rgba(168,85,247,0.3)',
+            opacity: loading ? 0.6 : 1,
+          }}
+        >
+          <Sparkles size={13} />
+          {loading ? 'Analyzing...' : 'Generate AI Fit Analysis'}
+        </button>
+      )}
     </div>
   )
 }

@@ -9,3 +9,5 @@ httpx>=0.24
 # Database
 sqlalchemy>=2.0
 psycopg2-binary>=2.9
+# AI
+anthropic>=0.30

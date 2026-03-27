@@ -213,6 +213,7 @@ def get_status():
         "api_keys": {
             "companies_house": bool(settings.companies_house_api_key),
             "openai": bool(settings.openai_api_key),
+            "anthropic": bool(settings.anthropic_api_key),
         },
         "pipeline": {
             "path": pipeline_path,
@@ -323,6 +324,188 @@ def get_lead(company_id: str):
         if row.get("company_id") == company_id:
             return row
     raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
+
+
+from pydantic import BaseModel
+from typing import Optional as Opt
+
+class LeadCreate(BaseModel):
+    company_name: str
+    company_type: str = ""
+    company_number: str = ""
+    sic_codes: str = ""
+    region: str = ""
+    address: str = ""
+    website_url: str = ""
+    source: str = ""
+    status: str = "Not Contacted"
+    tier: str = ""
+    notes: str = ""
+    next_action: str = ""
+    next_action_date: str = ""
+
+class LeadUpdate(BaseModel):
+    company_name: Opt[str] = None
+    company_type: Opt[str] = None
+    company_number: Opt[str] = None
+    sic_codes: Opt[str] = None
+    region: Opt[str] = None
+    address: Opt[str] = None
+    website_url: Opt[str] = None
+    source: Opt[str] = None
+    status: Opt[str] = None
+    tier: Opt[str] = None
+    notes: Opt[str] = None
+    next_action: Opt[str] = None
+    next_action_date: Opt[str] = None
+
+
+def _generate_company_id() -> str:
+    """Generate the next SEC-XXXX company ID."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, pipeline_table
+        from sqlalchemy import select, func
+        if db_available():
+            engine = get_engine()
+            with engine.connect() as conn:
+                result = conn.execute(select(func.count()).select_from(pipeline_table)).scalar() or 0
+                return f"SEC-{result + 1:04d}"
+    except Exception:
+        pass
+    return f"SEC-{int(time.time()) % 10000:04d}"
+
+
+@app.post("/api/pipeline")
+def create_lead(lead: LeadCreate):
+    """Create a new pipeline lead."""
+    try:
+        from secureflex_intel.db import db_available, upsert_rows, pipeline_table
+        if db_available():
+            company_id = _generate_company_id()
+            row = {
+                "company_id": company_id,
+                "company_name": lead.company_name,
+                "company_type": lead.company_type,
+                "company_number": lead.company_number,
+                "sic_codes": lead.sic_codes,
+                "region": lead.region,
+                "address": lead.address,
+                "website_url": lead.website_url,
+                "source": lead.source,
+                "status": lead.status or "Not Contacted",
+                "tier": lead.tier,
+                "notes": lead.notes,
+                "next_action": lead.next_action,
+                "next_action_date": lead.next_action_date,
+            }
+            written = upsert_rows(pipeline_table, [row], "company_id")
+            if written:
+                return {"status": "created", "company_id": company_id, "lead": row}
+            raise HTTPException(status_code=500, detail="Failed to write lead")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+
+@app.put("/api/pipeline/{company_id}")
+def update_lead(company_id: str, updates: LeadUpdate):
+    """Update an existing pipeline lead."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, pipeline_table
+        from sqlalchemy import update as sql_update
+        if db_available():
+            engine = get_engine()
+            update_data = {k: v for k, v in updates.dict().items() if v is not None}
+            if not update_data:
+                raise HTTPException(status_code=400, detail="No fields to update")
+            update_data["last_modified"] = datetime.utcnow()
+            with engine.begin() as conn:
+                result = conn.execute(
+                    sql_update(pipeline_table)
+                    .where(pipeline_table.c.company_id == company_id)
+                    .values(**update_data)
+                )
+                if result.rowcount == 0:
+                    raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
+            return {"status": "updated", "company_id": company_id, "updated_fields": list(update_data.keys())}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+
+@app.delete("/api/pipeline/{company_id}")
+def delete_lead(company_id: str):
+    """Delete a pipeline lead."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, pipeline_table
+        from sqlalchemy import delete as sql_delete
+        if db_available():
+            engine = get_engine()
+            with engine.begin() as conn:
+                result = conn.execute(
+                    sql_delete(pipeline_table)
+                    .where(pipeline_table.c.company_id == company_id)
+                )
+                if result.rowcount == 0:
+                    raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
+            return {"status": "deleted", "company_id": company_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+
+# ── AI Analysis Endpoints ───────────────────────────────────────────────────
+
+@app.get("/api/ai/status")
+def get_ai_status():
+    """Check if AI features are available."""
+    try:
+        from secureflex_intel.ai import ai_available
+        return {"available": ai_available()}
+    except Exception:
+        return {"available": False}
+
+
+@app.post("/api/ai/brief/{company_id}")
+def generate_brief(company_id: str):
+    """Generate an AI-powered research brief for a pipeline lead."""
+    # Get the lead data
+    try:
+        from secureflex_intel.db import db_available, query_table, pipeline_table
+        if db_available():
+            rows = query_table(pipeline_table, filters={"company_id": company_id}, limit=1)
+            if not rows:
+                raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
+            lead = rows[0]
+        else:
+            raise HTTPException(status_code=503, detail="Database unavailable")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    from secureflex_intel.ai import generate_ai_brief
+    brief = generate_ai_brief(lead)
+    return {"company_id": company_id, "brief": brief}
+
+
+@app.post("/api/ai/analyze/tender")
+def analyze_tender(tender: Dict[str, Any]):
+    """Generate AI analysis for a tender opportunity."""
+    from secureflex_intel.ai import generate_tender_analysis
+    analysis = generate_tender_analysis(tender)
+    return {"analysis": analysis}
+
+
+@app.post("/api/ai/analyze/prospect")
+def analyze_prospect(prospect: Dict[str, Any]):
+    """Generate AI analysis for a prospect."""
+    from secureflex_intel.ai import generate_prospect_analysis
+    analysis = generate_prospect_analysis(prospect)
+    return {"analysis": analysis}
 
 
 # ── Tenders Endpoints ────────────────────────────────────────────────────────

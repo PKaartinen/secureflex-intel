@@ -3,7 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type Prospect } from '../lib/api'
 import { Card, Button, PageHeader, LoadingSpinner, EmptyState, Table, Th, Td, Tr, Input } from '../components/ui'
 import { formatDate, formatRelativeTime } from '../lib/utils'
-import { Building2, Play, ExternalLink, Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, Globe, MapPin, Hash, Calendar, Briefcase, Shield, FileText } from 'lucide-react'
+import { Building2, Play, ExternalLink, Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, Globe, MapPin, Hash, Calendar, Briefcase, Shield, FileText, PlusCircle, Sparkles, CheckCircle2 } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 
 const COMPANY_TYPES = [
   'All',
@@ -542,10 +543,14 @@ export default function ProspectExplorer() {
                   </div>
                 </div>
 
+                {/* AI Analysis */}
+                <ProspectAIAnalysis prospect={selectedProspect} />
+
                 {/* Action links */}
                 <div>
                   <p className="text-xs uppercase tracking-wider mb-2" style={{ color: '#6b7280' }}>Actions</p>
                   <div className="space-y-2">
+                    <AddProspectToPipeline prospect={selectedProspect} />
                     {selectedProspect.company_number && (
                       <a
                         href={`https://find-and-update.company-information.service.gov.uk/company/${selectedProspect.company_number}`}
@@ -642,4 +647,113 @@ function getSecurityInsight(companyType?: string, status?: string): string {
     default:
       return 'Assess this company for potential security service requirements based on their sector and operational profile.'
   }
+}
+
+
+/** Add prospect to pipeline as a lead */
+function AddProspectToPipeline({ prospect }: { prospect: Prospect }) {
+  const queryClient = useQueryClient()
+  const [added, setAdded] = useState(false)
+  const [error, setError] = useState('')
+
+  const mutation = useMutation({
+    mutationFn: () => api.createLead({
+      company_name: prospect.company_name,
+      company_type: prospect.company_type || '',
+      company_number: prospect.company_number || '',
+      sic_codes: prospect.sic_codes || '',
+      region: prospect.region || '',
+      address: prospect.address || '',
+      website_url: prospect.website_url || '',
+      source: 'Prospect Explorer',
+      status: 'Not Contacted',
+      notes: `Imported from Prospect Explorer. Status: ${prospect.status || 'Unknown'}. SIC: ${prospect.sic_codes || 'N/A'}`,
+      next_action: 'Research company and identify decision maker',
+    }),
+    onSuccess: () => {
+      setAdded(true)
+      queryClient.invalidateQueries({ queryKey: ['pipeline'] })
+      queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] })
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
+  if (added) {
+    return (
+      <div
+        className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full"
+        style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}
+      >
+        <CheckCircle2 size={14} />
+        Added to Pipeline
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <button
+        onClick={() => mutation.mutate()}
+        disabled={mutation.isPending}
+        className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full transition-all"
+        style={{
+          background: 'rgba(34,197,94,0.15)',
+          color: '#22c55e',
+          border: '1px solid rgba(34,197,94,0.3)',
+          opacity: mutation.isPending ? 0.6 : 1,
+        }}
+      >
+        <PlusCircle size={14} />
+        {mutation.isPending ? 'Adding...' : 'Add to Pipeline'}
+      </button>
+      {error && <p className="text-xs text-center" style={{ color: '#ef4444' }}>{error}</p>}
+    </>
+  )
+}
+
+
+/** AI analysis for a prospect */
+function ProspectAIAnalysis({ prospect }: { prospect: Prospect }) {
+  const [analysis, setAnalysis] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  const runAnalysis = async () => {
+    setLoading(true)
+    try {
+      const result = await api.aiAnalyzeProspect(prospect as unknown as Record<string, unknown>)
+      setAnalysis(result.analysis)
+    } catch {
+      setAnalysis('AI analysis unavailable. Ensure ANTHROPIC_API_KEY is configured.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wider mb-1.5" style={{ color: '#6b7280' }}>AI Analysis</p>
+      {analysis ? (
+        <div className="rounded-lg p-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+          <div className="prose prose-invert prose-xs max-w-none" style={{ color: '#d1d5db', fontSize: '0.75rem', lineHeight: '1.4' }}>
+            <ReactMarkdown>{analysis}</ReactMarkdown>
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={runAnalysis}
+          disabled={loading}
+          className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full transition-all"
+          style={{
+            background: 'rgba(168,85,247,0.15)',
+            color: '#a855f7',
+            border: '1px solid rgba(168,85,247,0.3)',
+            opacity: loading ? 0.6 : 1,
+          }}
+        >
+          <Sparkles size={13} />
+          {loading ? 'Analyzing...' : 'Generate AI Analysis'}
+        </button>
+      )}
+    </div>
+  )
 }

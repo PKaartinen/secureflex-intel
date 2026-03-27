@@ -36,6 +36,10 @@ class Settings:
     def openai_api_key(self) -> str:
         return os.environ.get("OPENAI_API_KEY", "")
 
+    @property
+    def anthropic_api_key(self) -> str:
+        return os.environ.get("ANTHROPIC_API_KEY", "")
+
     # ── Paths ────────────────────────────────────────────────────────────
     @property
     def data_dir(self) -> Path:
