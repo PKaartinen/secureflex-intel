@@ -645,10 +645,18 @@ def get_signals(
                 r["relevance"] = r.get("description", "")
                 r["url"] = r.get("link", "")
             # Sort by published date descending (newest first)
+            from email.utils import parsedate_to_datetime
             def _parse_date(s):
                 if not s:
-                    return ""
-                return s
+                    return datetime.min
+                try:
+                    return parsedate_to_datetime(s)
+                except Exception:
+                    try:
+                        # Try ISO format fallback
+                        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+                    except Exception:
+                        return datetime.min
             rows.sort(key=lambda r: _parse_date(r.get("published", "")), reverse=True)
             rows = rows[:limit]
             return {
