@@ -70,7 +70,7 @@ export default function Layout() {
             </span>
             {status && (
               <span className="ml-auto text-xs font-mono" style={{ color: '#374151' }}>
-                {status.pipeline.lead_count} leads
+                {status.pipeline?.lead_count || 0} leads
               </span>
             )}
           </div>
@@ -109,7 +109,7 @@ export default function Layout() {
           <div className="flex items-center gap-2">
             <Activity size={12} style={{ color: '#374151' }} />
             <span className="text-xs" style={{ color: '#374151' }}>
-              {status ? `${status.data_counts.tenders}T · ${status.data_counts.signals}S · ${status.data_counts.prospects}P` : 'Loading...'}
+              {status ? `${status.data_counts.tenders} tenders · ${status.data_counts.signals} signals · ${status.data_counts.prospects} prospects` : 'Loading...'}
             </span>
           </div>
         </div>

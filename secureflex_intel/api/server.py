@@ -438,13 +438,18 @@ def get_prospects(
     try:
         from secureflex_intel.db import db_available, query_table, count_table, get_last_scan_time, prospects_table
         if db_available():
-            filters = {}
-            rows = query_table(prospects_table, order_by="scanned_at", limit=limit, offset=offset)
-            if company_type:
-                rows = [r for r in rows if company_type.lower() in (r.get("company_type") or "").lower()]
-            if region:
-                rows = [r for r in rows if region.lower() in (r.get("region") or "").lower()]
-            total = count_table(prospects_table)
+            # When filtering, fetch all matching rows then paginate
+            if company_type or region:
+                all_rows = query_table(prospects_table, order_by="company_name", order_desc=False, limit=5000, offset=0)
+                if company_type:
+                    all_rows = [r for r in all_rows if company_type.lower() in (r.get("company_type") or "").lower()]
+                if region:
+                    all_rows = [r for r in all_rows if region.lower() in (r.get("region") or "").lower()]
+                total = len(all_rows)
+                rows = all_rows[offset:offset + limit]
+            else:
+                rows = query_table(prospects_table, order_by="company_name", order_desc=False, limit=limit, offset=offset)
+                total = count_table(prospects_table)
             return {
                 "total": total,
                 "prospects": rows,
@@ -625,15 +630,29 @@ def get_signals(
     """Get latest intent signals (news, crime, jobs)."""
     # DB path
     try:
-        from secureflex_intel.db import db_available, query_table, get_last_scan_time, signals_table
+        from secureflex_intel.db import db_available, query_table, count_table, get_last_scan_time, signals_table
         if db_available():
-            rows = query_table(signals_table, order_by="score", limit=limit)
+            rows = query_table(signals_table, order_by="scanned_at", limit=500)
             if signal_type:
                 rows = [r for r in rows if signal_type.lower() in (r.get("signal_type") or "").lower()]
             if priority:
                 rows = [r for r in rows if priority.lower() in (r.get("signal_category") or "").lower()]
+            # Normalise field names for frontend compatibility
+            for r in rows:
+                r["type"] = r.get("signal_type", "")
+                r["priority"] = r.get("signal_category", "")
+                r["category"] = r.get("signal_type", "")
+                r["relevance"] = r.get("description", "")
+                r["url"] = r.get("link", "")
+            # Sort by published date descending (newest first)
+            def _parse_date(s):
+                if not s:
+                    return ""
+                return s
+            rows.sort(key=lambda r: _parse_date(r.get("published", "")), reverse=True)
+            rows = rows[:limit]
             return {
-                "total": len(rows),
+                "total": count_table(signals_table),
                 "signals": rows,
                 "last_scan": get_last_scan_time("signals"),
                 "source": "database",
@@ -825,6 +844,54 @@ def get_live_feed(limit: int = 50):
         "events": events[:limit],
         "generated_at": datetime.utcnow().isoformat() + "Z",
     }
+
+
+# ── Scan History Endpoint ────────────────────────────────────────────────────
+
+@app.get("/api/scan/history")
+def get_scan_history(limit: int = 20):
+    """Get recent scan run history from the database."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, scan_runs_table
+        from sqlalchemy import select
+        if db_available():
+            engine = get_engine()
+            with engine.connect() as conn:
+                stmt = (
+                    select(scan_runs_table)
+                    .order_by(scan_runs_table.c.id.desc())
+                    .limit(limit)
+                )
+                result = conn.execute(stmt)
+                runs = []
+                for row in result:
+                    r = dict(row._mapping)
+                    for k, v in r.items():
+                        if isinstance(v, datetime):
+                            r[k] = v.isoformat()
+                    runs.append(r)
+                # Check for any currently running scans
+                running_stmt = (
+                    select(scan_runs_table)
+                    .where(scan_runs_table.c.status == "running")
+                    .order_by(scan_runs_table.c.started_at.desc())
+                )
+                running_result = conn.execute(running_stmt)
+                running = []
+                for row in running_result:
+                    r = dict(row._mapping)
+                    for k, v in r.items():
+                        if isinstance(v, datetime):
+                            r[k] = v.isoformat()
+                    running.append(r)
+                return {
+                    "runs": runs,
+                    "running": running,
+                    "total": len(runs),
+                }
+    except Exception as e:
+        return {"runs": [], "running": [], "total": 0, "error": str(e)}
+    return {"runs": [], "running": [], "total": 0}
 
 
 # ── Scan Trigger Endpoints ───────────────────────────────────────────────────

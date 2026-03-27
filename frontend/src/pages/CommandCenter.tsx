@@ -26,7 +26,12 @@ export default function CommandCenter() {
 
   const scanAll = useMutation({
     mutationFn: async () => {
-      await Promise.allSettled([api.scanTenders(), api.scanSignals()])
+      await Promise.allSettled([
+        api.scanTenders(),
+        api.scanProspects(),
+        api.scanCompetitors(),
+        api.scanSignals(),
+      ])
     },
   })
 
@@ -89,7 +94,7 @@ export default function CommandCenter() {
           <StatCard
             title="Signals"
             value={warmSignals}
-            subtitle="news & crime signals"
+            subtitle="total intelligence signals"
             icon={<Rss size={16} />}
             color="#f59e0b"
           />
@@ -101,9 +106,9 @@ export default function CommandCenter() {
             color="#3b82f6"
           />
           <StatCard
-            title="Data Sources"
-            value={`${status?.data_counts.tenders || 0}T`}
-            subtitle={`${status?.data_counts.prospects || 0} prospects · ${status?.data_counts.briefs || 0} briefs`}
+            title="Prospects"
+            value={status?.data_counts.prospects || 0}
+            subtitle={`${status?.data_counts.competitors || 0} competitors tracked`}
             icon={<Trophy size={16} />}
             color="#22c55e"
           />

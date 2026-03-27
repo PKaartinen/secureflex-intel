@@ -81,14 +81,14 @@ export default function Settings() {
                       <div>
                         <p className="text-xs font-medium mb-1" style={{ color: '#3b82f6' }}>How to configure API keys</p>
                         <p className="text-xs" style={{ color: '#6b7280' }}>
-                          Set environment variables before starting the server:
+                          Set environment variables in the Railway service settings:
                         </p>
                         <div className="mt-2 rounded p-2 font-mono text-xs" style={{ background: '#0d1117', color: '#22c55e' }}>
                           <p>COMPANIES_HOUSE_API_KEY=your_key_here</p>
                           <p>OPENAI_API_KEY=your_key_here</p>
                         </div>
                         <p className="text-xs mt-2" style={{ color: '#6b7280' }}>
-                          Or create a <code className="px-1 py-0.5 rounded text-xs" style={{ background: '#1f2937', color: '#f9fafb' }}>.env</code> file in the project root.
+                          Go to Railway dashboard &rarr; Service &rarr; Variables to configure.
                         </p>
                       </div>
                     </div>
@@ -128,8 +128,8 @@ export default function Settings() {
                     <div className="flex items-start gap-2">
                       <Info size={14} className="mt-0.5 flex-shrink-0" style={{ color: '#f59e0b' }} />
                       <p className="text-xs" style={{ color: '#9ca3af' }}>
-                        Configuration is managed via environment variables or the <code className="px-1 py-0.5 rounded text-xs" style={{ background: '#1f2937', color: '#f9fafb' }}>config.py</code> file.
-                        Restart the server after making changes.
+                        Configuration is managed via Railway environment variables.
+                        Changes take effect after the next deployment.
                       </p>
                     </div>
                   </div>
@@ -137,43 +137,53 @@ export default function Settings() {
               </Card>
             )}
 
-            {/* Data Paths */}
-            {status?.pipeline && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Data Storage</CardTitle>
-                  <Database size={14} style={{ color: '#6b7280' }} />
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
-                      <div>
-                        <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>Pipeline Master CSV</p>
-                        <p className="text-xs font-mono mt-0.5" style={{ color: '#6b7280' }}>{status.pipeline.path}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="rounded-full"
-                          style={{ width: 8, height: 8, background: status.pipeline.exists ? '#22c55e' : '#ef4444' }}
-                        />
-                        <span className="text-xs" style={{ color: status.pipeline.exists ? '#22c55e' : '#6b7280' }}>
-                          {status.pipeline.exists ? `${status.pipeline.lead_count} leads` : 'Not created yet'}
-                        </span>
-                      </div>
+            {/* Data Storage */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Data Storage</CardTitle>
+                <Database size={14} style={{ color: '#6b7280' }} />
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
+                    <div>
+                      <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>PostgreSQL Database</p>
+                      <p className="text-xs font-mono mt-0.5" style={{ color: '#6b7280' }}>Railway managed instance</p>
                     </div>
-
-                    <div className="grid grid-cols-4 gap-3">
-                      {Object.entries(status.data_counts).map(([k, v]) => (
-                        <div key={k} className="p-3 rounded-lg text-center" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
-                          <p className="text-2xl font-bold" style={{ color: '#f9fafb' }}>{v}</p>
-                          <p className="text-xs mt-1 capitalize" style={{ color: '#6b7280' }}>{k}</p>
-                        </div>
-                      ))}
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="rounded-full"
+                        style={{ width: 8, height: 8, background: '#22c55e' }}
+                      />
+                      <span className="text-xs" style={{ color: '#22c55e' }}>
+                        Connected
+                      </span>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-            )}
+
+                  {status?.pipeline && (
+                    <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
+                      <div>
+                        <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>Pipeline Leads</p>
+                        <p className="text-xs mt-0.5" style={{ color: '#6b7280' }}>Tracked companies in growth pipeline</p>
+                      </div>
+                      <span className="text-sm font-bold" style={{ color: '#3b82f6' }}>
+                        {status.pipeline.lead_count || 0}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-5 gap-3">
+                    {status && Object.entries(status.data_counts).map(([k, v]) => (
+                      <div key={k} className="p-3 rounded-lg text-center" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
+                        <p className="text-2xl font-bold" style={{ color: '#f9fafb' }}>{v}</p>
+                        <p className="text-xs mt-1 capitalize" style={{ color: '#6b7280' }}>{k}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
             {/* About */}
             <Card>

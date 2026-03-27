@@ -23,9 +23,10 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
 export interface StatusResponse {
   status: string
   timestamp: string
+  database?: string
   api_keys: { companies_house: boolean; openai: boolean }
   pipeline: { path: string; exists: boolean; lead_count: number }
-  data_counts: { tenders: number; prospects: number; signals: number; briefs: number }
+  data_counts: { tenders: number; prospects: number; competitors?: number; signals: number; briefs: number }
   settings: { tender_region: string; tender_days_back: number; prospector_region: string; max_results: number }
 }
 
@@ -207,6 +208,22 @@ export interface ScanResponse {
   [key: string]: unknown
 }
 
+export interface ScanRun {
+  id: number
+  scan_type: string
+  started_at: string
+  completed_at: string | null
+  records_written: number
+  status: string
+  error: string | null
+}
+
+export interface ScanHistoryResponse {
+  runs: ScanRun[]
+  running: ScanRun[]
+  total: number
+}
+
 // ── API Functions ─────────────────────────────────────────────────────────────
 
 export const api = {
@@ -281,4 +298,6 @@ export const api = {
   scanProspects: (region = 'london') => post<ScanResponse>(`/scan/prospects?region=${region}`),
   scanCompetitors: (region = 'london') => post<ScanResponse>(`/scan/competitors?region=${region}`),
   scanSignals: () => post<ScanResponse>('/scan/signals'),
+
+  scanHistory: () => get<ScanHistoryResponse>('/scan/history'),
 }
