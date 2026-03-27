@@ -727,7 +727,31 @@ def save_signals_report(job_signals, news_signals, crime_data=None):
 
 
 def save_signals_csv(signals, filename):
-    """Save signals to CSV for pipeline import."""
+    """Save signals to CSV and database."""
+    # ── DB write (primary) ────────────────────────────────────────────────
+    try:
+        from secureflex_intel.db import db_available, upsert_rows, signals_table
+        from datetime import datetime as _dt
+        if db_available():
+            db_rows = []
+            for sig in signals:
+                db_rows.append({
+                    'link': sig.get('link') or sig.get('url') or None,
+                    'title': sig.get('title', ''),
+                    'company': sig.get('company', ''),
+                    'source': sig.get('source', ''),
+                    'published': sig.get('published', ''),
+                    'description': sig.get('description', ''),
+                    'score': int(sig.get('score', 0)),
+                    'signal_type': sig.get('signal_type', ''),
+                    'signal_category': sig.get('signal_category', ''),
+                    'scanned_at': _dt.utcnow(),
+                })
+            written = upsert_rows(signals_table, db_rows, 'link')
+            print(f'[DB] Upserted {written} signals')
+    except Exception as _db_err:
+        print(f'[DB] Signal DB write failed: {_db_err}')
+    # ── CSV write (backup) ────────────────────────────────────────────────
     filepath = os.path.join(SIGNALS_DIR, filename)
 
     fieldnames = [

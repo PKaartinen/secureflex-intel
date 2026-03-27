@@ -584,18 +584,48 @@ def enrich_pipeline_leads():
 # ── Output ───────────────────────────────────────────────────────────────────
 
 def save_prospects_csv(companies, filename, source_type):
-    """Save found companies to a CSV file."""
+    """Save found companies to CSV and database."""
+    # ── Determine DB table from filename ──────────────────────────────────
+    _is_competitor = filename.startswith('competitors_')
+    # ── Format rows first ────────────────────────────────────────────────
+    formatted = []
+    for company in companies:
+        fmt = format_company_for_pipeline(company, source_type)
+        formatted.append(fmt)
+    # ── DB write (primary) ────────────────────────────────────────────────
+    try:
+        from secureflex_intel.db import db_available, upsert_rows, prospects_table, competitors_table
+        from datetime import datetime as _dt
+        if db_available():
+            _table = competitors_table if _is_competitor else prospects_table
+            db_rows = []
+            for fmt in formatted:
+                if not fmt.get('company_number'):
+                    continue
+                db_rows.append({
+                    'company_number': fmt['company_number'],
+                    'company_name': fmt.get('company_name', ''),
+                    'company_type': fmt.get('company_type', ''),
+                    'sic_codes': fmt.get('sic_codes', ''),
+                    'status': fmt.get('status', ''),
+                    'region': fmt.get('region', ''),
+                    'address': fmt.get('address', ''),
+                    'date_of_creation': fmt.get('date_of_creation', ''),
+                    'website_url': fmt.get('website_url', ''),
+                    'scanned_at': _dt.utcnow(),
+                })
+            written = upsert_rows(_table, db_rows, 'company_number')
+            label = 'competitors' if _is_competitor else 'prospects'
+            print(f'[DB] Upserted {written} {label}')
+    except Exception as _db_err:
+        print(f'[DB] Company DB write failed: {_db_err}')
+    # ── CSV write (backup) ────────────────────────────────────────────────
     filepath = os.path.join(OUTPUT_DIR, filename)
 
     fieldnames = [
         "company_name", "company_number", "company_type", "sic_codes",
         "status", "region", "address", "date_of_creation", "website_url",
     ]
-
-    formatted = []
-    for company in companies:
-        fmt = format_company_for_pipeline(company, source_type)
-        formatted.append(fmt)
 
     with open(filepath, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)

@@ -1,9 +1,11 @@
-# Core dependencies (no external packages needed for CLI tools)
+# Core dependencies
 python-dotenv>=0.19
-
-# Server dependencies (needed for: python -m secureflex_intel serve)
+# Server dependencies
 fastapi>=0.100
 uvicorn[standard]>=0.20
-
 # Optional
 pyyaml>=6.0
+httpx>=0.24
+# Database
+sqlalchemy>=2.0
+psycopg2-binary>=2.9

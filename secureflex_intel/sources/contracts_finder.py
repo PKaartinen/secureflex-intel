@@ -475,7 +475,35 @@ def save_tender_report(opportunities, output_dir):
 
 
 def save_tender_csv(opportunities, output_dir):
-    """Save opportunities to CSV for pipeline import."""
+    """Save opportunities to CSV and database."""
+    # ── DB write (primary) ────────────────────────────────────────────────
+    try:
+        from secureflex_intel.db import db_available, upsert_rows, tenders_table
+        if db_available():
+            db_rows = []
+            for opp in opportunities:
+                db_rows.append({
+                    'ocid': opp.get('ocid') or None,
+                    'title': opp.get('title', ''),
+                    'buyer': opp.get('buyer', ''),
+                    'buyer_email': opp.get('buyer_email', ''),
+                    'region': opp.get('region', ''),
+                    'cpv_code': opp.get('cpv_code', ''),
+                    'value': str(opp.get('value', '')),
+                    'deadline': opp.get('deadline_display', ''),
+                    'sme_friendly': str(opp.get('sme_friendly', '')),
+                    'published_date': opp.get('published_display', ''),
+                    'link': opp.get('link', ''),
+                    'description_snippet': opp.get('description_snippet', ''),
+                    'score': int(opp.get('score', 0)),
+                    'classification': opp.get('classification', ''),
+                    'scanned_at': datetime.utcnow(),
+                })
+            written = upsert_rows(tenders_table, db_rows, 'ocid')
+            print(f'[DB] Upserted {written} tenders')
+    except Exception as _db_err:
+        print(f'[DB] Tender DB write failed: {_db_err}')
+    # ── CSV write (backup) ────────────────────────────────────────────────
     today = datetime.now().strftime("%Y-%m-%d")
     filepath = os.path.join(output_dir, f"tender_leads_{today}.csv")
 

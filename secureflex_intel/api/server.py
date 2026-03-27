@@ -49,6 +49,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── DB init on startup ────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+def startup_event():
+    """Initialise database tables on startup if DATABASE_URL is set."""
+    try:
+        from secureflex_intel.db import init_db
+        init_db()
+    except Exception as e:
+        print(f"[DB] Startup init failed (non-fatal): {e}")
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def read_csv_as_dicts(filepath: str) -> List[Dict[str, str]]:
@@ -113,7 +124,6 @@ def postcode_to_coords(postcode: str) -> Optional[tuple]:
     if not postcode:
         return None
     postcode = postcode.upper().strip()
-    # Try full prefix first (e.g., "EC", "NW"), then first letter
     for prefix in sorted(LONDON_POSTCODE_COORDS.keys(), key=len, reverse=True):
         if postcode.startswith(prefix):
             return LONDON_POSTCODE_COORDS[prefix]
@@ -131,6 +141,30 @@ def region_to_coords(region: str) -> Optional[tuple]:
     return None
 
 
+def _score_to_color(score: int) -> str:
+    if score >= 65:
+        return "#ef4444"
+    elif score >= 40:
+        return "#f59e0b"
+    elif score >= 20:
+        return "#22c55e"
+    return "#94a3b8"
+
+
+def _type_to_color(company_type: str) -> str:
+    colors = {
+        "Facilities Management": "#3b82f6",
+        "Venue/Events": "#8b5cf6",
+        "Corporate": "#06b6d4",
+        "Prime Contractor": "#f97316",
+        "Local Authority": "#10b981",
+    }
+    for key, color in colors.items():
+        if key.lower() in company_type.lower():
+            return color
+    return "#6b7280"
+
+
 # ── Status Endpoint ──────────────────────────────────────────────────────────
 
 @app.get("/api/status")
@@ -139,17 +173,43 @@ def get_status():
     settings.ensure_dirs()
     pipeline_path = str(settings.pipeline_path)
     pipeline_count = 0
-    if os.path.exists(pipeline_path):
-        with open(pipeline_path) as f:
-            pipeline_count = sum(1 for _ in csv.DictReader(f))
 
-    def count_files(d):
-        d = str(d)
-        return len([f for f in os.listdir(d) if os.path.isfile(os.path.join(d, f))]) if os.path.exists(d) else 0
+    # Try DB count first
+    try:
+        from secureflex_intel.db import db_available, count_table, pipeline_table, tenders_table, prospects_table, signals_table, competitors_table
+        if db_available():
+            pipeline_count = count_table(pipeline_table)
+            db_status = "connected"
+            data_counts = {
+                "tenders": count_table(tenders_table),
+                "prospects": count_table(prospects_table),
+                "competitors": count_table(competitors_table),
+                "signals": count_table(signals_table),
+                "briefs": len([f for f in os.listdir(str(settings.briefs_dir)) if f.endswith(".md")]) if os.path.exists(str(settings.briefs_dir)) else 0,
+            }
+        else:
+            raise Exception("DB not available")
+    except Exception:
+        db_status = "not_connected"
+        if os.path.exists(pipeline_path):
+            with open(pipeline_path) as f:
+                pipeline_count = sum(1 for _ in csv.DictReader(f))
+
+        def count_files(d):
+            d = str(d)
+            return len([f for f in os.listdir(d) if os.path.isfile(os.path.join(d, f))]) if os.path.exists(d) else 0
+
+        data_counts = {
+            "tenders": count_files(settings.tenders_dir),
+            "prospects": count_files(settings.prospects_dir),
+            "signals": count_files(settings.signals_dir),
+            "briefs": count_files(settings.briefs_dir),
+        }
 
     return {
         "status": "ok",
         "timestamp": datetime.utcnow().isoformat() + "Z",
+        "database": db_status,
         "api_keys": {
             "companies_house": bool(settings.companies_house_api_key),
             "openai": bool(settings.openai_api_key),
@@ -159,12 +219,7 @@ def get_status():
             "exists": os.path.exists(pipeline_path),
             "lead_count": pipeline_count,
         },
-        "data_counts": {
-            "tenders": count_files(settings.tenders_dir),
-            "prospects": count_files(settings.prospects_dir),
-            "signals": count_files(settings.signals_dir),
-            "briefs": count_files(settings.briefs_dir),
-        },
+        "data_counts": data_counts,
         "settings": {
             "tender_region": settings.tender_region,
             "tender_days_back": settings.tender_days_back,
@@ -176,56 +231,31 @@ def get_status():
 
 # ── Pipeline / Leads Endpoints ───────────────────────────────────────────────
 
-@app.get("/api/pipeline")
-def get_pipeline(
-    status: Optional[str] = None,
-    tier: Optional[str] = None,
-    company_type: Optional[str] = None,
-    sort_by: str = "last_modified",
-    limit: int = 100,
-):
-    """Get pipeline leads with optional filtering."""
-    pipeline_path = str(settings.pipeline_path)
-    rows = read_csv_as_dicts(pipeline_path)
-
-    if status:
-        rows = [r for r in rows if status.lower() in r.get("status", "").lower()]
-    if tier:
-        rows = [r for r in rows if r.get("tier") == tier]
-    if company_type:
-        rows = [r for r in rows if company_type.lower() in r.get("company_type", "").lower()]
-
-    # Sort
-    rows.sort(key=lambda r: r.get(sort_by, ""), reverse=True)
-
-    return {
-        "total": len(rows),
-        "leads": rows[:limit],
-    }
-
-
-@app.get("/api/pipeline/{company_id}")
-def get_lead(company_id: str):
-    """Get a single lead by company ID."""
-    pipeline_path = str(settings.pipeline_path)
-    rows = read_csv_as_dicts(pipeline_path)
-    for row in rows:
-        if row.get("company_id") == company_id:
-            return row
-    raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
-
-
 @app.get("/api/pipeline/stats")
 def get_pipeline_stats():
     """Pipeline statistics — counts by status, tier, type."""
+    # DB path
+    try:
+        from secureflex_intel.db import db_available, query_table, count_table, pipeline_table
+        if db_available():
+            rows = query_table(pipeline_table, limit=5000)
+            by_status, by_tier, by_type, by_source = {}, {}, {}, {}
+            for row in rows:
+                s = row.get("status", "Unknown") or "Unknown"
+                by_status[s] = by_status.get(s, 0) + 1
+                t = row.get("tier", "Unknown") or "Unknown"
+                by_tier[t] = by_tier.get(t, 0) + 1
+                ct = row.get("company_type", "Unknown") or "Unknown"
+                by_type[ct] = by_type.get(ct, 0) + 1
+                src = row.get("source", "Unknown") or "Unknown"
+                by_source[src] = by_source.get(src, 0) + 1
+            return {"total": len(rows), "by_status": by_status, "by_tier": by_tier, "by_type": by_type, "by_source": by_source}
+    except Exception:
+        pass
+    # CSV fallback
     pipeline_path = str(settings.pipeline_path)
     rows = read_csv_as_dicts(pipeline_path)
-
-    by_status = {}
-    by_tier = {}
-    by_type = {}
-    by_source = {}
-
+    by_status, by_tier, by_type, by_source = {}, {}, {}, {}
     for row in rows:
         s = row.get("status", "Unknown")
         by_status[s] = by_status.get(s, 0) + 1
@@ -235,14 +265,64 @@ def get_pipeline_stats():
         by_type[ct] = by_type.get(ct, 0) + 1
         src = row.get("source", "Unknown")
         by_source[src] = by_source.get(src, 0) + 1
+    return {"total": len(rows), "by_status": by_status, "by_tier": by_tier, "by_type": by_type, "by_source": by_source}
 
-    return {
-        "total": len(rows),
-        "by_status": by_status,
-        "by_tier": by_tier,
-        "by_type": by_type,
-        "by_source": by_source,
-    }
+
+@app.get("/api/pipeline")
+def get_pipeline(
+    status: Optional[str] = None,
+    tier: Optional[str] = None,
+    company_type: Optional[str] = None,
+    sort_by: str = "last_modified",
+    limit: int = 100,
+):
+    """Get pipeline leads with optional filtering."""
+    # DB path
+    try:
+        from secureflex_intel.db import db_available, query_table, count_table, pipeline_table
+        if db_available():
+            filters = {}
+            if status:
+                filters["status"] = status
+            if tier:
+                filters["tier"] = tier
+            rows = query_table(pipeline_table, filters=filters, order_by=sort_by, limit=limit)
+            if company_type:
+                rows = [r for r in rows if company_type.lower() in (r.get("company_type") or "").lower()]
+            total = count_table(pipeline_table)
+            return {"total": total, "leads": rows}
+    except Exception:
+        pass
+    # CSV fallback
+    pipeline_path = str(settings.pipeline_path)
+    rows = read_csv_as_dicts(pipeline_path)
+    if status:
+        rows = [r for r in rows if status.lower() in r.get("status", "").lower()]
+    if tier:
+        rows = [r for r in rows if r.get("tier") == tier]
+    if company_type:
+        rows = [r for r in rows if company_type.lower() in r.get("company_type", "").lower()]
+    rows.sort(key=lambda r: r.get(sort_by, ""), reverse=True)
+    return {"total": len(rows), "leads": rows[:limit]}
+
+
+@app.get("/api/pipeline/{company_id}")
+def get_lead(company_id: str):
+    """Get a single lead by company ID."""
+    try:
+        from secureflex_intel.db import db_available, query_table, pipeline_table
+        if db_available():
+            rows = query_table(pipeline_table, filters={"company_id": company_id}, limit=1)
+            if rows:
+                return rows[0]
+    except Exception:
+        pass
+    pipeline_path = str(settings.pipeline_path)
+    rows = read_csv_as_dicts(pipeline_path)
+    for row in rows:
+        if row.get("company_id") == company_id:
+            return row
+    raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
 
 
 # ── Tenders Endpoints ────────────────────────────────────────────────────────
@@ -254,29 +334,39 @@ def get_tenders(
     region: Optional[str] = None,
 ):
     """Get latest tender scan results."""
+    # DB path
+    try:
+        from secureflex_intel.db import db_available, query_table, count_table, get_last_scan_time, tenders_table
+        if db_available():
+            rows = query_table(tenders_table, order_by="score", limit=500)
+            if classification:
+                rows = [r for r in rows if classification.lower() in (r.get("classification") or "").lower()]
+            if min_score:
+                rows = [r for r in rows if int(r.get("score") or 0) >= min_score]
+            if region:
+                rows = [r for r in rows if region.lower() in (r.get("region") or "").lower()]
+            return {
+                "total": len(rows),
+                "tenders": rows,
+                "last_scan": get_last_scan_time("tenders"),
+                "source": "database",
+            }
+    except Exception:
+        pass
+    # CSV fallback
     tenders_dir = str(settings.tenders_dir)
     latest_csv = get_latest_file(tenders_dir, "tender_leads_", ext=".csv")
-
     if not latest_csv:
         return {"total": 0, "tenders": [], "last_scan": None}
-
     rows = read_csv_as_dicts(latest_csv)
-
     if classification:
         rows = [r for r in rows if classification.lower() in r.get("classification", "").lower()]
     if min_score:
         rows = [r for r in rows if int(r.get("score", 0)) >= min_score]
     if region:
         rows = [r for r in rows if region.lower() in r.get("region", "").lower()]
-
     last_modified = datetime.fromtimestamp(os.path.getmtime(latest_csv)).isoformat()
-
-    return {
-        "total": len(rows),
-        "tenders": rows,
-        "last_scan": last_modified,
-        "source_file": os.path.basename(latest_csv),
-    }
+    return {"total": len(rows), "tenders": rows, "last_scan": last_modified, "source_file": os.path.basename(latest_csv)}
 
 
 @app.get("/api/tenders/report")
@@ -295,48 +385,43 @@ def get_tender_report():
 @app.get("/api/tenders/geojson")
 def get_tenders_geojson():
     """GeoJSON of tender locations for map display."""
-    tenders_dir = str(settings.tenders_dir)
-    latest_csv = get_latest_file(tenders_dir, "tender_leads_", ext=".csv")
-
-    rows = read_csv_as_dicts(latest_csv) if latest_csv else []
+    import random
+    # DB path
+    try:
+        from secureflex_intel.db import db_available, query_table, tenders_table
+        if db_available():
+            rows = query_table(tenders_table, order_by="score", limit=200)
+        else:
+            raise Exception("no db")
+    except Exception:
+        tenders_dir = str(settings.tenders_dir)
+        latest_csv = get_latest_file(tenders_dir, "tender_leads_", ext=".csv")
+        rows = read_csv_as_dicts(latest_csv) if latest_csv else []
 
     features = []
     for row in rows:
         region = row.get("region", "")
-        coords = region_to_coords(region)
-        if not coords:
-            coords = (51.5074, -0.1278)  # Default to London
-
-        # Add slight randomization to avoid stacking
-        import random
+        coords = region_to_coords(region) or (51.5074, -0.1278)
         lat = coords[0] + random.uniform(-0.02, 0.02)
         lng = coords[1] + random.uniform(-0.02, 0.02)
-
         features.append({
             "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [lng, lat],
-            },
+            "geometry": {"type": "Point", "coordinates": [lng, lat]},
             "properties": {
                 "title": row.get("title", ""),
                 "buyer": row.get("buyer", ""),
                 "region": region,
-                "score": int(row.get("score", 0)),
+                "score": int(row.get("score") or 0),
                 "classification": row.get("classification", ""),
                 "value": row.get("value", ""),
                 "deadline": row.get("deadline", ""),
                 "buyer_email": row.get("buyer_email", ""),
                 "link": row.get("link", ""),
                 "marker_type": "tender",
-                "marker_color": _score_to_color(int(row.get("score", 0))),
+                "marker_color": _score_to_color(int(row.get("score") or 0)),
             },
         })
-
-    return {
-        "type": "FeatureCollection",
-        "features": features,
-    }
+    return {"type": "FeatureCollection", "features": features}
 
 
 # ── Prospects Endpoints ──────────────────────────────────────────────────────
@@ -349,22 +434,39 @@ def get_prospects(
     offset: int = 0,
 ):
     """Get prospect companies from latest scan."""
+    # DB path
+    try:
+        from secureflex_intel.db import db_available, query_table, count_table, get_last_scan_time, prospects_table
+        if db_available():
+            filters = {}
+            rows = query_table(prospects_table, order_by="scanned_at", limit=limit, offset=offset)
+            if company_type:
+                rows = [r for r in rows if company_type.lower() in (r.get("company_type") or "").lower()]
+            if region:
+                rows = [r for r in rows if region.lower() in (r.get("region") or "").lower()]
+            total = count_table(prospects_table)
+            return {
+                "total": total,
+                "prospects": rows,
+                "last_scan": get_last_scan_time("prospects"),
+                "offset": offset,
+                "limit": limit,
+                "source": "database",
+            }
+    except Exception:
+        pass
+    # CSV fallback
     prospects_dir = str(settings.prospects_dir)
     latest_csv = get_latest_file(prospects_dir, "prospect_clients_", ext=".csv")
-
     if not latest_csv:
         return {"total": 0, "prospects": [], "last_scan": None}
-
     rows = read_csv_as_dicts(latest_csv)
-
     if company_type:
         rows = [r for r in rows if company_type.lower() in r.get("company_type", "").lower()]
     if region:
         rows = [r for r in rows if region.lower() in r.get("region", "").lower()]
-
     total = len(rows)
     rows = rows[offset:offset + limit]
-
     return {
         "total": total,
         "prospects": rows,
@@ -377,18 +479,22 @@ def get_prospects(
 @app.get("/api/prospects/geojson")
 def get_prospects_geojson(limit: int = 200):
     """GeoJSON of prospect locations for map display."""
-    prospects_dir = str(settings.prospects_dir)
-    latest_csv = get_latest_file(prospects_dir, "prospect_clients_", ext=".csv")
-
-    rows = read_csv_as_dicts(latest_csv) if latest_csv else []
+    import random
+    try:
+        from secureflex_intel.db import db_available, query_table, prospects_table
+        if db_available():
+            rows = query_table(prospects_table, order_by="scanned_at", limit=limit)
+        else:
+            raise Exception("no db")
+    except Exception:
+        prospects_dir = str(settings.prospects_dir)
+        latest_csv = get_latest_file(prospects_dir, "prospect_clients_", ext=".csv")
+        rows = read_csv_as_dicts(latest_csv) if latest_csv else []
 
     features = []
-    import random
     for row in rows[:limit]:
         address = row.get("address", "")
         region = row.get("region", "")
-
-        # Try to get coords from postcode in address
         coords = None
         parts = address.split(",")
         for part in reversed(parts):
@@ -397,21 +503,15 @@ def get_prospects_geojson(limit: int = 200):
                 coords = postcode_to_coords(part)
                 if coords:
                     break
-
         if not coords:
             coords = region_to_coords(region)
         if not coords:
             coords = (51.5074, -0.1278)
-
         lat = coords[0] + random.uniform(-0.015, 0.015)
         lng = coords[1] + random.uniform(-0.015, 0.015)
-
         features.append({
             "type": "Feature",
-            "geometry": {
-                "type": "Point",
-                "coordinates": [lng, lat],
-            },
+            "geometry": {"type": "Point", "coordinates": [lng, lat]},
             "properties": {
                 "name": row.get("company_name", ""),
                 "company_number": row.get("company_number", ""),
@@ -425,11 +525,7 @@ def get_prospects_geojson(limit: int = 200):
                 "marker_color": _type_to_color(row.get("company_type", "")),
             },
         })
-
-    return {
-        "type": "FeatureCollection",
-        "features": features,
-    }
+    return {"type": "FeatureCollection", "features": features}
 
 
 # ── Competitors Endpoints ────────────────────────────────────────────────────
@@ -437,15 +533,29 @@ def get_prospects_geojson(limit: int = 200):
 @app.get("/api/competitors")
 def get_competitors(limit: int = 100, offset: int = 0):
     """Get competitor companies from latest scan."""
+    # DB path
+    try:
+        from secureflex_intel.db import db_available, query_table, count_table, get_last_scan_time, competitors_table
+        if db_available():
+            rows = query_table(competitors_table, order_by="scanned_at", limit=limit, offset=offset)
+            total = count_table(competitors_table)
+            return {
+                "total": total,
+                "competitors": rows,
+                "last_scan": get_last_scan_time("competitors"),
+                "offset": offset,
+                "limit": limit,
+                "source": "database",
+            }
+    except Exception:
+        pass
+    # CSV fallback
     prospects_dir = str(settings.prospects_dir)
     latest_csv = get_latest_file(prospects_dir, "competitors_", ext=".csv")
-
     if not latest_csv:
         return {"total": 0, "competitors": [], "last_scan": None}
-
     rows = read_csv_as_dicts(latest_csv)
     total = len(rows)
-
     return {
         "total": total,
         "competitors": rows[offset:offset + limit],
@@ -458,13 +568,19 @@ def get_competitors(limit: int = 100, offset: int = 0):
 @app.get("/api/competitors/geojson")
 def get_competitors_geojson(limit: int = 200):
     """GeoJSON of competitor locations for map display."""
-    prospects_dir = str(settings.prospects_dir)
-    latest_csv = get_latest_file(prospects_dir, "competitors_", ext=".csv")
-
-    rows = read_csv_as_dicts(latest_csv) if latest_csv else []
+    import random
+    try:
+        from secureflex_intel.db import db_available, query_table, competitors_table
+        if db_available():
+            rows = query_table(competitors_table, order_by="scanned_at", limit=limit)
+        else:
+            raise Exception("no db")
+    except Exception:
+        prospects_dir = str(settings.prospects_dir)
+        latest_csv = get_latest_file(prospects_dir, "competitors_", ext=".csv")
+        rows = read_csv_as_dicts(latest_csv) if latest_csv else []
 
     features = []
-    import random
     for row in rows[:limit]:
         address = row.get("address", "")
         region = row.get("region", "")
@@ -480,10 +596,8 @@ def get_competitors_geojson(limit: int = 200):
             coords = region_to_coords(region)
         if not coords:
             coords = (51.5074, -0.1278)
-
         lat = coords[0] + random.uniform(-0.01, 0.01)
         lng = coords[1] + random.uniform(-0.01, 0.01)
-
         features.append({
             "type": "Feature",
             "geometry": {"type": "Point", "coordinates": [lng, lat]},
@@ -497,7 +611,6 @@ def get_competitors_geojson(limit: int = 200):
                 "marker_color": "#ef4444",
             },
         })
-
     return {"type": "FeatureCollection", "features": features}
 
 
@@ -510,19 +623,33 @@ def get_signals(
     limit: int = 100,
 ):
     """Get latest intent signals (news, crime, jobs)."""
+    # DB path
+    try:
+        from secureflex_intel.db import db_available, query_table, get_last_scan_time, signals_table
+        if db_available():
+            rows = query_table(signals_table, order_by="score", limit=limit)
+            if signal_type:
+                rows = [r for r in rows if signal_type.lower() in (r.get("signal_type") or "").lower()]
+            if priority:
+                rows = [r for r in rows if priority.lower() in (r.get("signal_category") or "").lower()]
+            return {
+                "total": len(rows),
+                "signals": rows,
+                "last_scan": get_last_scan_time("signals"),
+                "source": "database",
+            }
+    except Exception:
+        pass
+    # CSV fallback
     signals_dir = str(settings.signals_dir)
     latest_csv = get_latest_file(signals_dir, "news_signals_", ext=".csv")
-
     if not latest_csv:
         return {"total": 0, "signals": [], "last_scan": None}
-
     rows = read_csv_as_dicts(latest_csv)
-
     if signal_type:
         rows = [r for r in rows if signal_type.lower() in r.get("type", "").lower()]
     if priority:
         rows = [r for r in rows if priority.lower() in r.get("priority", "").lower()]
-
     return {
         "total": len(rows),
         "signals": rows[:limit],
@@ -550,7 +677,6 @@ def get_briefs():
     briefs_dir = str(settings.briefs_dir)
     if not os.path.exists(briefs_dir):
         return {"total": 0, "briefs": []}
-
     briefs = []
     for f in sorted(os.listdir(briefs_dir)):
         if f.endswith(".md"):
@@ -562,7 +688,6 @@ def get_briefs():
                 "size": os.path.getsize(filepath),
                 "last_modified": datetime.fromtimestamp(os.path.getmtime(filepath)).isoformat(),
             })
-
     return {"total": len(briefs), "briefs": briefs}
 
 
@@ -587,24 +712,14 @@ def get_all_map_data(
     prospect_limit: int = 200,
     competitor_limit: int = 100,
 ):
-    """
-    Combined GeoJSON for the main map view.
-    Returns all data layers in a single response.
-    """
+    """Combined GeoJSON for the main map view."""
     features = []
-
     if include_tenders:
-        tender_data = get_tenders_geojson()
-        features.extend(tender_data.get("features", []))
-
+        features.extend(get_tenders_geojson().get("features", []))
     if include_prospects:
-        prospect_data = get_prospects_geojson(limit=prospect_limit)
-        features.extend(prospect_data.get("features", []))
-
+        features.extend(get_prospects_geojson(limit=prospect_limit).get("features", []))
     if include_competitors:
-        competitor_data = get_competitors_geojson(limit=competitor_limit)
-        features.extend(competitor_data.get("features", []))
-
+        features.extend(get_competitors_geojson(limit=competitor_limit).get("features", []))
     return {
         "type": "FeatureCollection",
         "features": features,
@@ -624,53 +739,87 @@ def get_all_map_data(
 
 @app.get("/api/feed")
 def get_live_feed(limit: int = 50):
-    """
-    Aggregated live feed of recent activity across all sources.
-    Returns a chronologically sorted list of events.
-    """
+    """Aggregated live feed of recent activity across all sources."""
     events = []
 
-    # Add tenders
-    tenders_dir = str(settings.tenders_dir)
-    latest_tender_csv = get_latest_file(tenders_dir, "tender_leads_", ext=".csv")
-    if latest_tender_csv:
-        rows = read_csv_as_dicts(latest_tender_csv)
-        scan_time = datetime.fromtimestamp(os.path.getmtime(latest_tender_csv))
-        for row in rows[:20]:
-            events.append({
-                "type": "tender",
-                "timestamp": scan_time.isoformat(),
-                "title": f"Tender: {row.get('title', '')[:80]}",
-                "subtitle": f"{row.get('buyer', '')} — {row.get('region', '')}",
-                "score": int(row.get("score", 0)),
-                "classification": row.get("classification", ""),
-                "detail": f"Value: {row.get('value', 'N/A')} | Deadline: {row.get('deadline', 'N/A')}",
-                "link": row.get("link", ""),
-                "icon": "📋",
-            })
+    # Tenders — DB first
+    try:
+        from secureflex_intel.db import db_available, query_table, tenders_table
+        if db_available():
+            t_rows = query_table(tenders_table, order_by="scanned_at", limit=20)
+            for row in t_rows:
+                events.append({
+                    "type": "tender",
+                    "timestamp": row.get("scanned_at", datetime.utcnow().isoformat()),
+                    "title": f"Tender: {(row.get('title') or '')[:80]}",
+                    "subtitle": f"{row.get('buyer', '')} — {row.get('region', '')}",
+                    "score": int(row.get("score") or 0),
+                    "classification": row.get("classification", ""),
+                    "detail": f"Value: {row.get('value', 'N/A')} | Deadline: {row.get('deadline', 'N/A')}",
+                    "link": row.get("link", ""),
+                    "icon": "📋",
+                })
+        else:
+            raise Exception("no db")
+    except Exception:
+        tenders_dir = str(settings.tenders_dir)
+        latest_tender_csv = get_latest_file(tenders_dir, "tender_leads_", ext=".csv")
+        if latest_tender_csv:
+            rows = read_csv_as_dicts(latest_tender_csv)
+            scan_time = datetime.fromtimestamp(os.path.getmtime(latest_tender_csv))
+            for row in rows[:20]:
+                events.append({
+                    "type": "tender",
+                    "timestamp": scan_time.isoformat(),
+                    "title": f"Tender: {row.get('title', '')[:80]}",
+                    "subtitle": f"{row.get('buyer', '')} — {row.get('region', '')}",
+                    "score": int(row.get("score", 0)),
+                    "classification": row.get("classification", ""),
+                    "detail": f"Value: {row.get('value', 'N/A')} | Deadline: {row.get('deadline', 'N/A')}",
+                    "link": row.get("link", ""),
+                    "icon": "📋",
+                })
 
-    # Add signals
-    signals_dir = str(settings.signals_dir)
-    latest_signal_csv = get_latest_file(signals_dir, "news_signals_", ext=".csv")
-    if latest_signal_csv:
-        rows = read_csv_as_dicts(latest_signal_csv)
-        for row in rows[:30]:
-            priority = row.get("priority", "medium")
-            icon = "🔴" if priority == "hot" else "🟡" if priority == "warm" else "🟢"
-            events.append({
-                "type": "signal",
-                "timestamp": row.get("published", datetime.utcnow().isoformat()),
-                "title": row.get("title", "")[:80],
-                "subtitle": row.get("source", ""),
-                "priority": priority,
-                "detail": row.get("relevance", ""),
-                "link": row.get("url", row.get("link", "")),
-                "icon": icon,
-            })
+    # Signals — DB first
+    try:
+        from secureflex_intel.db import db_available, query_table, signals_table
+        if db_available():
+            s_rows = query_table(signals_table, order_by="score", limit=30)
+            for row in s_rows:
+                score = int(row.get("score") or 0)
+                icon = "🔴" if score >= 70 else "🟡" if score >= 40 else "🟢"
+                events.append({
+                    "type": "signal",
+                    "timestamp": row.get("scanned_at", datetime.utcnow().isoformat()),
+                    "title": (row.get("title") or "")[:80],
+                    "subtitle": row.get("source", ""),
+                    "score": score,
+                    "detail": row.get("description", ""),
+                    "link": row.get("link", ""),
+                    "icon": icon,
+                })
+        else:
+            raise Exception("no db")
+    except Exception:
+        signals_dir = str(settings.signals_dir)
+        latest_signal_csv = get_latest_file(signals_dir, "news_signals_", ext=".csv")
+        if latest_signal_csv:
+            rows = read_csv_as_dicts(latest_signal_csv)
+            for row in rows[:30]:
+                priority = row.get("priority", "medium")
+                icon = "🔴" if priority == "hot" else "🟡" if priority == "warm" else "🟢"
+                events.append({
+                    "type": "signal",
+                    "timestamp": row.get("published", datetime.utcnow().isoformat()),
+                    "title": row.get("title", "")[:80],
+                    "subtitle": row.get("source", ""),
+                    "priority": priority,
+                    "detail": row.get("relevance", ""),
+                    "link": row.get("url", row.get("link", "")),
+                    "icon": icon,
+                })
 
-    # Sort by timestamp (newest first)
     events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
-
     return {
         "total": len(events),
         "events": events[:limit],
@@ -757,39 +906,10 @@ def trigger_competitor_scan(
     return {"status": "scan_started", "type": "competitors", "region": region}
 
 
-# ── Utility ──────────────────────────────────────────────────────────────────
-
-def _score_to_color(score: int) -> str:
-    """Convert a score to a hex color for map markers."""
-    if score >= 65:
-        return "#ef4444"  # red (hot)
-    elif score >= 40:
-        return "#f59e0b"  # amber (warm)
-    elif score >= 20:
-        return "#22c55e"  # green (monitor)
-    return "#94a3b8"      # gray (low)
-
-
-def _type_to_color(company_type: str) -> str:
-    """Convert company type to marker color."""
-    colors = {
-        "Facilities Management": "#3b82f6",  # blue
-        "Venue/Events": "#8b5cf6",           # purple
-        "Corporate": "#06b6d4",              # cyan
-        "Prime Contractor": "#f97316",       # orange
-        "Local Authority": "#10b981",        # emerald
-    }
-    for key, color in colors.items():
-        if key.lower() in company_type.lower():
-            return color
-    return "#6b7280"  # gray default
-
-
 ## ── Static SPA Serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 
 if _STATIC_DIR.exists():
-    # Mount assets directory for hashed JS/CSS files
     _ASSETS_DIR = _STATIC_DIR / "assets"
     if _ASSETS_DIR.exists():
         app.mount("/assets", StaticFiles(directory=str(_ASSETS_DIR)), name="assets")
@@ -808,7 +928,6 @@ if _STATIC_DIR.exists():
     # Catch-all SPA route — must be LAST
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_spa(full_path: str):
-        # Don't intercept API routes
         if full_path.startswith("api/") or full_path in ("docs", "redoc", "openapi.json"):
             from fastapi import HTTPException
             raise HTTPException(status_code=404)
