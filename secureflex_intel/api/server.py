@@ -60,13 +60,15 @@ def read_csv_as_dicts(filepath: str) -> List[Dict[str, str]]:
         return list(reader)
 
 
-def get_latest_file(directory: str, pattern: str = "") -> Optional[str]:
-    """Get the most recently modified file in a directory."""
+def get_latest_file(directory: str, pattern: str = "", ext: str = "") -> Optional[str]:
+    """Get the most recently modified file in a directory matching pattern and optional extension."""
     if not os.path.exists(directory):
         return None
     files = []
     for f in os.listdir(directory):
         if pattern and pattern not in f:
+            continue
+        if ext and not f.endswith(ext):
             continue
         filepath = os.path.join(directory, f)
         if os.path.isfile(filepath):
@@ -253,7 +255,7 @@ def get_tenders(
 ):
     """Get latest tender scan results."""
     tenders_dir = str(settings.tenders_dir)
-    latest_csv = get_latest_file(tenders_dir, "tender_leads_")
+    latest_csv = get_latest_file(tenders_dir, "tender_leads_", ext=".csv")
 
     if not latest_csv:
         return {"total": 0, "tenders": [], "last_scan": None}
@@ -281,7 +283,7 @@ def get_tenders(
 def get_tender_report():
     """Get the latest tender scan report as markdown."""
     tenders_dir = str(settings.tenders_dir)
-    latest_md = get_latest_file(tenders_dir, "tender_scan_")
+    latest_md = get_latest_file(tenders_dir, "tender_scan_", ext=".md")
     content = read_markdown_file(latest_md)
     return {
         "content": content,
@@ -294,7 +296,8 @@ def get_tender_report():
 def get_tenders_geojson():
     """GeoJSON of tender locations for map display."""
     tenders_dir = str(settings.tenders_dir)
-    latest_csv = get_latest_file(tenders_dir, "tender_leads_")
+    latest_csv = get_latest_file(tenders_dir, "tender_leads_", ext=".csv")
+
     rows = read_csv_as_dicts(latest_csv) if latest_csv else []
 
     features = []
@@ -347,7 +350,7 @@ def get_prospects(
 ):
     """Get prospect companies from latest scan."""
     prospects_dir = str(settings.prospects_dir)
-    latest_csv = get_latest_file(prospects_dir, "prospect_clients_")
+    latest_csv = get_latest_file(prospects_dir, "prospect_clients_", ext=".csv")
 
     if not latest_csv:
         return {"total": 0, "prospects": [], "last_scan": None}
@@ -375,7 +378,8 @@ def get_prospects(
 def get_prospects_geojson(limit: int = 200):
     """GeoJSON of prospect locations for map display."""
     prospects_dir = str(settings.prospects_dir)
-    latest_csv = get_latest_file(prospects_dir, "prospect_clients_")
+    latest_csv = get_latest_file(prospects_dir, "prospect_clients_", ext=".csv")
+
     rows = read_csv_as_dicts(latest_csv) if latest_csv else []
 
     features = []
@@ -434,7 +438,7 @@ def get_prospects_geojson(limit: int = 200):
 def get_competitors(limit: int = 100, offset: int = 0):
     """Get competitor companies from latest scan."""
     prospects_dir = str(settings.prospects_dir)
-    latest_csv = get_latest_file(prospects_dir, "competitors_")
+    latest_csv = get_latest_file(prospects_dir, "competitors_", ext=".csv")
 
     if not latest_csv:
         return {"total": 0, "competitors": [], "last_scan": None}
@@ -455,7 +459,8 @@ def get_competitors(limit: int = 100, offset: int = 0):
 def get_competitors_geojson(limit: int = 200):
     """GeoJSON of competitor locations for map display."""
     prospects_dir = str(settings.prospects_dir)
-    latest_csv = get_latest_file(prospects_dir, "competitors_")
+    latest_csv = get_latest_file(prospects_dir, "competitors_", ext=".csv")
+
     rows = read_csv_as_dicts(latest_csv) if latest_csv else []
 
     features = []
@@ -506,7 +511,7 @@ def get_signals(
 ):
     """Get latest intent signals (news, crime, jobs)."""
     signals_dir = str(settings.signals_dir)
-    latest_csv = get_latest_file(signals_dir, "news_signals_")
+    latest_csv = get_latest_file(signals_dir, "news_signals_", ext=".csv")
 
     if not latest_csv:
         return {"total": 0, "signals": [], "last_scan": None}
@@ -529,7 +534,7 @@ def get_signals(
 def get_signals_report():
     """Get the latest signals report as markdown."""
     signals_dir = str(settings.signals_dir)
-    latest_md = get_latest_file(signals_dir, "intent_signals_")
+    latest_md = get_latest_file(signals_dir, "intent_signals_", ext=".md")
     content = read_markdown_file(latest_md)
     return {
         "content": content,
@@ -627,7 +632,7 @@ def get_live_feed(limit: int = 50):
 
     # Add tenders
     tenders_dir = str(settings.tenders_dir)
-    latest_tender_csv = get_latest_file(tenders_dir, "tender_leads_")
+    latest_tender_csv = get_latest_file(tenders_dir, "tender_leads_", ext=".csv")
     if latest_tender_csv:
         rows = read_csv_as_dicts(latest_tender_csv)
         scan_time = datetime.fromtimestamp(os.path.getmtime(latest_tender_csv))
@@ -646,7 +651,7 @@ def get_live_feed(limit: int = 50):
 
     # Add signals
     signals_dir = str(settings.signals_dir)
-    latest_signal_csv = get_latest_file(signals_dir, "news_signals_")
+    latest_signal_csv = get_latest_file(signals_dir, "news_signals_", ext=".csv")
     if latest_signal_csv:
         rows = read_csv_as_dicts(latest_signal_csv)
         for row in rows[:30]:
