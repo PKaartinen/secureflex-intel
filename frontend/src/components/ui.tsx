@@ -228,11 +228,12 @@ export function Td({ children, className }: { children: React.ReactNode; classNa
   )
 }
 
-export function Tr({ children, onClick, className }: { children: React.ReactNode; onClick?: () => void; className?: string }) {
+export function Tr({ children, onClick, className, style }: { children: React.ReactNode; onClick?: () => void; className?: string; style?: React.CSSProperties }) {
   return (
     <tr
       className={cn('transition-colors', onClick ? 'cursor-pointer hover:bg-white/5' : '', className)}
       onClick={onClick}
+      style={style}
     >
       {children}
     </tr>

@@ -51,46 +51,136 @@ OUTPUT_DIR = str(settings.prospects_dir)
 
 # SIC codes for companies that BUY security services
 CLIENT_SIC_CODES = {
-    # Real estate and property management
+    # Facilities management / real estate
     "68100": "Buying and selling of own real estate",
     "68201": "Renting of Housing Association real estate",
     "68209": "Other letting and operating of real estate",
     "68320": "Management of real estate on a fee or contract basis",
-    # Hospitality and venues
+    "81100": "Combined facilities support activities",
+    "81210": "General cleaning of buildings",
+    "81221": "Window cleaning services",
+    "81222": "Specialised cleaning services",
+    "81290": "Other building and industrial cleaning activities",
+    # Hotels and accommodation
     "55100": "Hotels and similar accommodation",
     "55201": "Holiday centres and villages",
+    "55202": "Youth hostels",
+    "55209": "Other holiday and short-stay accommodation",
+    "55300": "Recreational vehicle parks, trailer parks and camping grounds",
+    # Restaurants and bars
     "56101": "Licensed restaurants",
+    "56102": "Unlicensed restaurants and cafes",
+    "56210": "Event catering activities",
     "56301": "Licensed clubs",
     "56302": "Public houses and bars",
-    # Sports, leisure, events
-    "93110": "Operation of sports facilities",
-    "93199": "Other sports activities not elsewhere classified",
-    "93210": "Activities of amusement parks and theme parks",
-    "93290": "Other amusement and recreation activities",
-    "90040": "Operation of arts facilities",
     # Retail
     "47110": "Retail sale in non-specialised stores with food/beverages",
     "47190": "Other retail sale in non-specialised stores",
     "47710": "Retail sale of clothing in specialised stores",
+    "47720": "Retail sale of footwear and leather goods",
+    "47730": "Dispensing chemist in specialised stores",
+    "47740": "Retail sale of medical and orthopaedic goods",
+    "47750": "Retail sale of cosmetic and toilet articles",
+    "47760": "Retail sale of flowers, plants, seeds, fertilisers",
+    "47770": "Retail sale of watches and jewellery",
+    "47789": "Other retail sale of new goods in specialised stores",
+    "47810": "Retail sale via stalls and markets of food",
+    "47910": "Retail sale via mail order houses or via Internet",
     # Healthcare
     "86101": "Hospital activities",
+    "86102": "Medical nursing home activities",
     "86210": "General medical practice activities",
+    "86220": "Specialist medical practice activities",
+    "86230": "Dental practice activities",
+    "86900": "Other human health activities",
     "87100": "Residential nursing care facilities",
+    "87200": "Residential care activities for learning difficulties",
+    "87300": "Residential care activities for the elderly and disabled",
+    "87900": "Other residential care activities",
+    "88100": "Social work activities without accommodation for the elderly",
+    "88910": "Child day-care activities",
     # Education
+    "85100": "Pre-primary education",
     "85200": "Primary education",
     "85310": "General secondary education",
+    "85320": "Technical and vocational secondary education",
+    "85410": "Post-secondary non-tertiary education",
     "85421": "First-degree level higher education",
-    # Financial services
-    "64110": "Central banking",
-    "64191": "Banks",
-    "64192": "Building societies",
-    # Construction (new sites need security)
+    "85422": "Post-graduate level higher education",
+    "85510": "Sports and recreation education",
+    "85520": "Cultural education",
+    "85590": "Other education not elsewhere classified",
+    "85600": "Educational support activities",
+    # Construction
     "41100": "Development of building projects",
     "41201": "Construction of commercial buildings",
     "41202": "Construction of domestic buildings",
+    "42110": "Construction of roads and motorways",
+    "42120": "Construction of railways and underground railways",
+    "42130": "Construction of bridges and tunnels",
+    "42210": "Construction of utility projects for fluids",
+    "42220": "Construction of utility projects for electricity and telecommunications",
+    "42910": "Construction of water projects",
+    "42990": "Construction of other civil engineering projects",
+    "43110": "Demolition",
+    "43120": "Site preparation",
+    "43290": "Other construction installation",
     # Warehousing and logistics
     "52100": "Warehousing and storage",
+    "52211": "Operation of rail freight terminals",
+    "52212": "Operation of rail passenger facilities at railway stations",
+    "52213": "Operation of bus and coach passenger facilities at bus and coach stations",
+    "52219": "Other service activities incidental to land transportation",
+    "52220": "Service activities incidental to water transportation",
+    "52230": "Service activities incidental to air transportation",
     "52241": "Cargo handling for water transport",
+    "52242": "Cargo handling for air transport",
+    "52243": "Cargo handling for land transport",
+    "52290": "Other transportation support activities",
+    "49410": "Freight transport by road",
+    "49420": "Removal services",
+    # Corporate / financial services / offices
+    "64110": "Central banking",
+    "64191": "Banks",
+    "64192": "Building societies",
+    "64205": "Activities of financial services holding companies",
+    "64209": "Activities of other holding companies",
+    "64301": "Activities of investment trusts",
+    "64302": "Activities of unit trusts",
+    "65110": "Life insurance",
+    "65120": "Non-life insurance",
+    "65201": "Life reinsurance",
+    "65202": "Non-life reinsurance",
+    "66110": "Administration of financial markets",
+    "66120": "Security and commodity contracts dealing activities",
+    "66190": "Other activities auxiliary to financial services",
+    "70100": "Activities of head offices",
+    "70221": "Financial management",
+    "70229": "Management consultancy activities",
+    # Sports, leisure, events
+    "93110": "Operation of sports facilities",
+    "93120": "Activities of sport clubs",
+    "93130": "Fitness facilities",
+    "93191": "Activities of racehorse owners",
+    "93199": "Other sports activities not elsewhere classified",
+    "93210": "Activities of amusement parks and theme parks",
+    "93290": "Other amusement and recreation activities",
+    "90010": "Performing arts",
+    "90020": "Support activities to performing arts",
+    "90030": "Artistic creation",
+    "90040": "Operation of arts facilities",
+    "91020": "Museums activities",
+    "91030": "Operation of historical sites and buildings",
+    # Prime contractor / government / local authority
+    "84110": "General public administration activities",
+    "84120": "Regulation of health care, education, cultural and other social services",
+    "84130": "Regulation of and contribution to more efficient operation of businesses",
+    "84210": "Foreign affairs",
+    "84220": "Defence activities",
+    "84230": "Justice and judicial activities",
+    "84240": "Public order and safety activities",
+    "84250": "Fire service activities",
+    "84300": "Compulsory social security activities",
 }
 
 # SIC codes for security industry (competitors)
@@ -264,20 +354,44 @@ def format_company_for_pipeline(company, source_type="Companies House"):
     company_number = company.get("company_number", "")
     company_name = company.get("company_name", company.get("title", ""))
 
-    # Determine company type based on SIC codes
+    # Determine company type based on SIC codes (priority order: most specific first)
     company_type = "Corporate"
     for code in sic_codes:
         if code in SECURITY_SIC_CODES:
             company_type = "Prime Contractor"
             break
-        if code in ["68100", "68201", "68209", "68320"]:
+        elif code in ["68100", "68201", "68209", "68320",
+                      "81100", "81210", "81221", "81222", "81290"]:
             company_type = "Facilities Management"
-        elif code in ["93110", "93199", "93210", "93290", "90040"]:
-            company_type = "Venue/Events"
-        elif code.startswith("86") or code.startswith("87"):
-            company_type = "Corporate"  # Healthcare
+        elif code in ["55100", "55201", "55202", "55209", "55300"]:
+            company_type = "Hotel"
+        elif code in ["47110", "47190", "47710", "47720", "47730",
+                      "47740", "47750", "47760", "47770", "47789",
+                      "47810", "47910"]:
+            company_type = "Retail"
+        elif code.startswith("86") or code.startswith("87") or code.startswith("88"):
+            company_type = "Healthcare"
         elif code.startswith("85"):
-            company_type = "Corporate"  # Education
+            company_type = "Education"
+        elif code.startswith("41") or code.startswith("42") or code.startswith("43"):
+            company_type = "Construction"
+        elif code in ["52100", "52211", "52212", "52213", "52219",
+                      "52220", "52230", "52241", "52242", "52243",
+                      "52290", "49410", "49420"]:
+            company_type = "Warehouse/Logistics"
+        elif code in ["84110", "84120", "84130", "84210", "84220",
+                      "84230", "84240", "84250", "84300"]:
+            company_type = "Local Authority"
+        elif code in ["93110", "93120", "93130", "93191", "93199",
+                      "93210", "93290", "90010", "90020", "90030",
+                      "90040", "91020", "91030",
+                      "56101", "56102", "56210", "56301", "56302"]:
+            company_type = "Venue/Events"
+        elif code in ["64110", "64191", "64192", "64205", "64209",
+                      "64301", "64302", "65110", "65120", "65201",
+                      "65202", "66110", "66120", "66190",
+                      "70100", "70221", "70229"]:
+            company_type = "Corporate"
 
     # Determine region
     detected_region = "Unknown"
@@ -319,21 +433,68 @@ def prospect_clients(sic_codes_to_search=None, region_filter="london", max_resul
 
     all_companies = {}  # Deduplicate by company number
 
-    # Strategy 1: Search for industry-specific terms + London
+    # Strategy 1: Search for industry-specific terms + London (all 10 company types)
     search_terms = [
-        "property management London",
+        # Facilities management
         "facilities management London",
-        "hotel London",
-        "shopping centre London",
-        "sports facility London",
-        "event venue London",
-        "office building London",
-        "warehouse London",
-        "hospital London",
-        "university London",
-        "retail park London",
-        "construction London security",
+        "property management London",
+        "building management London",
+        "estate management London",
         "real estate London",
+        "office building management London",
+        # Hotels
+        "hotel London",
+        "boutique hotel London",
+        "apart hotel London",
+        "serviced apartments London",
+        # Retail
+        "shopping centre London",
+        "retail park London",
+        "supermarket London",
+        "department store London",
+        "retail London",
+        # Healthcare
+        "hospital London",
+        "NHS trust London",
+        "private hospital London",
+        "care home London",
+        "medical centre London",
+        # Education
+        "university London",
+        "college London",
+        "school London",
+        "academy London",
+        "independent school London",
+        # Construction
+        "construction London",
+        "developer London",
+        "housebuilder London",
+        "civil engineering London",
+        "infrastructure London",
+        # Warehouse / logistics
+        "warehouse London",
+        "logistics London",
+        "distribution centre London",
+        "freight London",
+        "storage London",
+        # Corporate / financial
+        "corporate headquarters London",
+        "financial services London",
+        "insurance London",
+        "investment management London",
+        # Local authority / government
+        "local authority London",
+        "council London",
+        "housing association London",
+        "government agency London",
+        # Venues / events
+        "event venue London",
+        "sports facility London",
+        "stadium London",
+        "arena London",
+        "conference centre London",
+        "nightclub London",
+        "restaurant group London",
     ]
 
     for term in search_terms:
@@ -353,9 +514,9 @@ def prospect_clients(sic_codes_to_search=None, region_filter="london", max_resul
         if len(all_companies) >= max_results:
             break
 
-    # Strategy 2: Try advanced search with SIC codes (if available)
+    # Strategy 2: Try advanced search with SIC codes (covers all company types)
     print(f"\n  🔎 Trying advanced search with SIC codes...")
-    for sic_code, description in list(sic_codes_to_search.items())[:10]:
+    for sic_code, description in list(sic_codes_to_search.items()):
         result = search_advanced(
             sic_codes=[sic_code],
             location="london" if region_filter == "london" else None,

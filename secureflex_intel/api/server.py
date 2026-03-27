@@ -906,6 +906,41 @@ def trigger_competitor_scan(
     return {"status": "scan_started", "type": "competitors", "region": region}
 
 
+# ── Utility ──────────────────────────────────────────────────────────────────
+
+def _score_to_color(score: int) -> str:
+    """Convert a score to a hex color for map markers."""
+    if score >= 65:
+        return "#ef4444"  # red (hot)
+    elif score >= 40:
+        return "#f59e0b"  # amber (warm)
+    elif score >= 20:
+        return "#22c55e"  # green (monitor)
+    return "#94a3b8"      # gray (low)
+
+
+def _type_to_color(company_type: str) -> str:
+    """Convert company type to marker color."""
+    colors = {
+        "Facilities Management": "#3b82f6",   # blue
+        "Hotel":                 "#a855f7",   # violet
+        "Retail":                "#ec4899",   # pink
+        "Healthcare":            "#14b8a6",   # teal
+        "Education":             "#84cc16",   # lime
+        "Construction":          "#f97316",   # orange
+        "Warehouse":             "#eab308",   # yellow
+        "Logistics":             "#eab308",   # yellow (same as warehouse)
+        "Corporate":             "#06b6d4",   # cyan
+        "Prime Contractor":      "#ef4444",   # red
+        "Local Authority":       "#10b981",   # emerald
+        "Venue":                 "#8b5cf6",   # purple
+    }
+    for key, color in colors.items():
+        if key.lower() in company_type.lower():
+            return color
+    return "#6b7280"  # gray default
+
+
 ## ── Static SPA Serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 

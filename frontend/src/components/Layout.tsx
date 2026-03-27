@@ -1,10 +1,11 @@
 import { Outlet, NavLink, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { useAuth } from '../auth'
 import {
   LayoutDashboard, Map, FileText, Kanban, Building2,
   Eye, Rss, BookOpen, BarChart3, ScanLine, Settings,
-  Shield, Activity, ChevronRight
+  Shield, Activity, ChevronRight, LogOut
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 
@@ -24,6 +25,7 @@ const navItems = [
 
 export default function Layout() {
   const location = useLocation()
+  const { user, logout } = useAuth()
 
   const { data: status } = useQuery({
     queryKey: ['status'],
@@ -38,11 +40,7 @@ export default function Layout() {
       {/* Sidebar */}
       <aside
         className="flex flex-col flex-shrink-0 border-r"
-        style={{
-          width: 240,
-          background: '#0d1117',
-          borderColor: '#1f2937',
-        }}
+        style={{ width: 240, background: '#0d1117', borderColor: '#1f2937' }}
       >
         {/* Logo */}
         <div className="flex items-center gap-3 px-4 py-4 border-b" style={{ borderColor: '#1f2937' }}>
@@ -65,10 +63,7 @@ export default function Layout() {
           <div className="flex items-center gap-2">
             <div
               className="rounded-full pulse-dot"
-              style={{
-                width: 6, height: 6,
-                background: status?.status === 'ok' ? '#22c55e' : '#ef4444',
-              }}
+              style={{ width: 6, height: 6, background: status?.status === 'ok' ? '#22c55e' : '#ef4444' }}
             />
             <span className="text-xs" style={{ color: '#6b7280' }}>
               {status?.status === 'ok' ? 'System Online' : 'Connecting...'}
@@ -90,9 +85,7 @@ export default function Layout() {
               end={path === '/'}
               className={({ isActive }) => cn(
                 'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-all group',
-                isActive
-                  ? 'text-white'
-                  : 'hover:text-gray-200'
+                isActive ? 'text-white' : 'hover:text-gray-200'
               )}
               style={({ isActive }) => ({
                 background: isActive ? 'rgba(59,130,246,0.15)' : 'transparent',
@@ -111,8 +104,8 @@ export default function Layout() {
           ))}
         </nav>
 
-        {/* Footer */}
-        <div className="px-4 py-3 border-t" style={{ borderColor: '#1f2937' }}>
+        {/* Data counts */}
+        <div className="px-4 py-2 border-t" style={{ borderColor: '#1f2937' }}>
           <div className="flex items-center gap-2">
             <Activity size={12} style={{ color: '#374151' }} />
             <span className="text-xs" style={{ color: '#374151' }}>
@@ -120,13 +113,34 @@ export default function Layout() {
             </span>
           </div>
         </div>
+
+        {/* User / logout */}
+        {user && (
+          <div className="px-4 py-3 border-t flex items-center gap-3" style={{ borderColor: '#1f2937' }}>
+            <div
+              className="flex items-center justify-center rounded-full text-xs font-bold flex-shrink-0"
+              style={{ width: 30, height: 30, background: 'rgba(59,130,246,0.2)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}
+            >
+              {user.initials}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium truncate" style={{ color: '#f9fafb' }}>{user.displayName}</p>
+              <p className="text-xs truncate" style={{ color: '#4b5563' }}>Internal</p>
+            </div>
+            <button
+              onClick={logout}
+              title="Sign out"
+              className="flex items-center justify-center rounded-lg p-1.5 transition-colors hover:bg-red-900/20"
+              style={{ color: '#6b7280' }}
+            >
+              <LogOut size={14} />
+            </button>
+          </div>
+        )}
       </aside>
 
       {/* Main content */}
-      <main
-        className="flex-1 flex flex-col overflow-hidden"
-        style={{ background: '#0a0a0f' }}
-      >
+      <main className="flex-1 flex flex-col overflow-hidden" style={{ background: '#0a0a0f' }}>
         <Outlet />
       </main>
     </div>

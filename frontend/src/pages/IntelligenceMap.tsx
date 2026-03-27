@@ -12,18 +12,37 @@ interface LayerToggle {
   enabled: boolean
 }
 
+// Prospect company type → color (must match server.py _type_to_color)
+const PROSPECT_TYPE_COLORS: { label: string; color: string; shape: 'circle' }[] = [
+  { label: 'Facilities Management', color: '#3b82f6', shape: 'circle' },
+  { label: 'Venue / Events',        color: '#8b5cf6', shape: 'circle' },
+  { label: 'Corporate',             color: '#06b6d4', shape: 'circle' },
+  { label: 'Prime Contractor',      color: '#f97316', shape: 'circle' },
+  { label: 'Local Authority',       color: '#10b981', shape: 'circle' },
+  { label: 'Other Prospect',        color: '#6b7280', shape: 'circle' },
+]
+
+// Score-based classification colours (from server.py _score_to_color)
+const SCORE_COLORS: { label: string; color: string }[] = [
+  { label: 'HOT (score ≥ 60)',    color: '#ef4444' },
+  { label: 'WARM (score ≥ 40)',   color: '#f59e0b' },
+  { label: 'MONITOR (score ≥ 20)', color: '#22c55e' },
+  { label: 'LOW (score < 20)',    color: '#94a3b8' },
+]
+
 export default function IntelligenceMap() {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<L.Map | null>(null)
   const markersLayerRef = useRef<L.LayerGroup | null>(null)
 
   const [layers, setLayers] = useState<LayerToggle[]>([
-    { id: 'prospect', label: 'Prospects', color: '#3b82f6', enabled: true },
+    { id: 'prospect',   label: 'Prospects',   color: '#3b82f6', enabled: true },
     { id: 'competitor', label: 'Competitors', color: '#ef4444', enabled: true },
-    { id: 'tender', label: 'Tenders', color: '#f59e0b', enabled: true },
+    { id: 'tender',     label: 'Tenders',     color: '#f59e0b', enabled: true },
   ])
 
   const [selectedFeature, setSelectedFeature] = useState<Record<string, string | number | null> | null>(null)
+  const [showLegend, setShowLegend] = useState(true)
 
   const { data: mapData, refetch, isFetching } = useQuery({
     queryKey: ['map-all'],
@@ -119,7 +138,7 @@ export default function IntelligenceMap() {
             })
             setSelectedFeature({ ...safeProps, name, subtitle })
           })
-          .bindTooltip(name, {
+          .bindTooltip(`<b>${name}</b><br/><span style="color:#9ca3af">${subtitle}</span>`, {
             direction: 'top',
             offset: [0, -size / 2],
           })
@@ -172,6 +191,17 @@ export default function IntelligenceMap() {
               </button>
             ))}
           </div>
+          <button
+            onClick={() => setShowLegend(v => !v)}
+            className="px-2.5 py-1 rounded-full text-xs transition-all"
+            style={{
+              background: showLegend ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.03)',
+              border: '1px solid #374151',
+              color: '#9ca3af',
+            }}
+          >
+            Legend
+          </button>
           <Button size="sm" variant="ghost" onClick={() => refetch()} loading={isFetching}>
             <RefreshCw size={12} />
           </Button>
@@ -209,6 +239,12 @@ export default function IntelligenceMap() {
                   <span style={{ color: '#f9fafb' }}>{selectedFeature.score}</span>
                 </div>
               )}
+              {selectedFeature.company_type && (
+                <div className="flex justify-between text-xs">
+                  <span style={{ color: '#6b7280' }}>Type</span>
+                  <span style={{ color: '#f9fafb' }}>{selectedFeature.company_type}</span>
+                </div>
+              )}
               {selectedFeature.region && (
                 <div className="flex justify-between text-xs">
                   <span style={{ color: '#6b7280' }}>Region</span>
@@ -233,6 +269,12 @@ export default function IntelligenceMap() {
                   <span className="text-right" style={{ color: '#f9fafb', maxWidth: 160 }}>{selectedFeature.address}</span>
                 </div>
               )}
+              {selectedFeature.sic_codes && (
+                <div className="flex justify-between text-xs">
+                  <span style={{ color: '#6b7280' }}>SIC</span>
+                  <span className="font-mono" style={{ color: '#9ca3af' }}>{selectedFeature.sic_codes}</span>
+                </div>
+              )}
               {selectedFeature.link && (
                 <a
                   href={String(selectedFeature.link)}
@@ -248,26 +290,56 @@ export default function IntelligenceMap() {
           </div>
         )}
 
-        {/* Legend */}
-        <div
-          className="absolute bottom-4 left-4 rounded-xl border p-3"
-          style={{ background: 'rgba(13,17,23,0.9)', borderColor: '#374151', zIndex: 1000 }}
-        >
-          <p className="text-xs font-semibold mb-2" style={{ color: '#6b7280' }}>LEGEND</p>
-          {layers.map(l => (
-            <div key={l.id} className="flex items-center gap-2 mb-1">
-              <div style={{
-                width: 8, height: 8,
-                borderRadius: l.id === 'competitor' ? 2 : '50%',
-                background: l.color,
-                transform: l.id === 'competitor' ? 'rotate(45deg)' : 'none',
-              }} />
-              <span className="text-xs" style={{ color: '#9ca3af' }}>{l.label}</span>
-            </div>
-          ))}
-        </div>
+        {/* Comprehensive Legend */}
+        {showLegend && (
+          <div
+            className="absolute bottom-4 left-4 rounded-xl border p-4"
+            style={{ background: 'rgba(13,17,23,0.95)', borderColor: '#374151', zIndex: 1000, minWidth: 220 }}
+          >
+            <p className="text-xs font-bold uppercase tracking-wider mb-3" style={{ color: '#6b7280' }}>Map Legend</p>
 
-        {/* Stats overlay */}
+            {/* Layer types */}
+            <p className="text-xs font-semibold mb-1.5" style={{ color: '#4b5563' }}>LAYER TYPES</p>
+            <div className="space-y-1.5 mb-3">
+              <div className="flex items-center gap-2">
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6', flexShrink: 0 }} />
+                <span className="text-xs" style={{ color: '#9ca3af' }}>Prospect (circle)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div style={{ width: 8, height: 8, borderRadius: 2, background: '#ef4444', transform: 'rotate(45deg)', flexShrink: 0 }} />
+                <span className="text-xs" style={{ color: '#9ca3af' }}>Competitor (diamond)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />
+                <span className="text-xs" style={{ color: '#9ca3af' }}>Tender (large circle)</span>
+              </div>
+            </div>
+
+            {/* Prospect colours by company type */}
+            <p className="text-xs font-semibold mb-1.5" style={{ color: '#4b5563' }}>PROSPECT COLOURS</p>
+            <div className="space-y-1.5 mb-3">
+              {PROSPECT_TYPE_COLORS.map(({ label, color }) => (
+                <div key={label} className="flex items-center gap-2">
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                  <span className="text-xs" style={{ color: '#9ca3af' }}>{label}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Tender score colours */}
+            <p className="text-xs font-semibold mb-1.5" style={{ color: '#4b5563' }}>TENDER SCORE</p>
+            <div className="space-y-1.5">
+              {SCORE_COLORS.map(({ label, color }) => (
+                <div key={label} className="flex items-center gap-2">
+                  <div style={{ width: 12, height: 12, borderRadius: '50%', background: color, flexShrink: 0 }} />
+                  <span className="text-xs" style={{ color: '#9ca3af' }}>{label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Coverage stats overlay */}
         {mapData?.metadata && (
           <div
             className="absolute bottom-4 right-4 rounded-xl border p-3"

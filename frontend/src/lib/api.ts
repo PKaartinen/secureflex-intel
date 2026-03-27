@@ -100,6 +100,7 @@ export interface Prospect {
   website_url: string
   date_of_creation?: string
   source?: string
+  score?: number
 }
 
 export interface ProspectsResponse {
