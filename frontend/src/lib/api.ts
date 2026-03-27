@@ -236,6 +236,35 @@ export interface GeoJSONCollection {
   metadata?: { total_features: number; layers: Record<string, number>; generated_at: string }
 }
 
+export interface DossierPayload {
+  company_name: string
+  company_number?: string
+  company_type?: string
+  region?: string
+  sic_codes?: string
+  address?: string
+  website_url?: string
+}
+
+export interface DossierResponse {
+  company_name: string
+  company_number?: string
+  generated_at: string
+  dossier_markdown: string
+  sources_used: string[]
+  data_summary: {
+    has_prospect_record: boolean
+    has_pipeline_lead: boolean
+    is_known_competitor: boolean
+    signal_count: number
+    tender_count: number
+    news_article_count: number
+    has_ch_profile: boolean
+    has_website_analysis: boolean
+  }
+  saved_as?: string | null
+}
+
 export interface ScanResponse {
   status: string
   type: string
@@ -352,4 +381,8 @@ export const api = {
   aiBrief: (companyId: string) => post<{ company_id: string; brief: string }>(`/ai/brief/${companyId}`),
   aiAnalyzeTender: (tender: Record<string, unknown>) => post<{ analysis: string }>('/ai/analyze/tender', tender),
   aiAnalyzeProspect: (prospect: Record<string, unknown>) => post<{ analysis: string }>('/ai/analyze/prospect', prospect),
+
+  // Dossier
+  generateDossier: (payload: DossierPayload) => post<DossierResponse>('/dossier/generate', payload),
+  getSavedDossier: (companyId: string) => get<{ company_id: string; company_name: string; dossier_markdown: string; generated_at: string }>(`/dossier/${companyId}`),
 }

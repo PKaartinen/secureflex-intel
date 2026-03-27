@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type Prospect } from '../lib/api'
 import { Card, Button, PageHeader, LoadingSpinner, EmptyState, Table, Th, Td, Tr, Input } from '../components/ui'
 import { formatDate, formatRelativeTime } from '../lib/utils'
-import { Building2, Play, ExternalLink, Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, Globe, MapPin, Hash, Calendar, Briefcase, Shield, FileText, PlusCircle, Sparkles, CheckCircle2 } from 'lucide-react'
+import { Building2, Play, ExternalLink, Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, Globe, MapPin, Hash, Calendar, Briefcase, Shield, FileText, PlusCircle, Sparkles, CheckCircle2, BookOpen, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 
 const COMPANY_TYPES = [
@@ -546,6 +546,9 @@ export default function ProspectExplorer() {
                 {/* AI Analysis */}
                 <ProspectAIAnalysis prospect={selectedProspect} />
 
+                {/* Sales Intelligence Dossier */}
+                <ProspectDossier prospect={selectedProspect} />
+
                 {/* Action links */}
                 <div>
                   <p className="text-xs uppercase tracking-wider mb-2" style={{ color: '#6b7280' }}>Actions</p>
@@ -708,6 +711,111 @@ function AddProspectToPipeline({ prospect }: { prospect: Prospect }) {
       </button>
       {error && <p className="text-xs text-center" style={{ color: '#ef4444' }}>{error}</p>}
     </>
+  )
+}
+
+
+/** Generate Sales Intelligence Dossier for a prospect */
+function ProspectDossier({ prospect }: { prospect: Prospect }) {
+  const [dossier, setDossier] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [sources, setSources] = useState<string[]>([])
+  const [error, setError] = useState('')
+
+  const generateDossier = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const result = await api.generateDossier({
+        company_name: prospect.company_name,
+        company_number: prospect.company_number || '',
+        company_type: prospect.company_type || '',
+        region: prospect.region || '',
+        sic_codes: prospect.sic_codes || '',
+        address: prospect.address || '',
+        website_url: prospect.website_url || '',
+      })
+      setDossier(result.dossier_markdown)
+      setSources(result.sources_used)
+    } catch (e: any) {
+      setError(e.message || 'Failed to generate dossier')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (dossier) {
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <p className="text-xs uppercase tracking-wider" style={{ color: '#6b7280' }}>Sales Intelligence Dossier</p>
+          <button
+            onClick={() => { setDossier(null); setSources([]) }}
+            className="text-xs px-1.5 py-0.5 rounded"
+            style={{ color: '#6b7280', background: 'rgba(255,255,255,0.05)' }}
+          >
+            Close
+          </button>
+        </div>
+        {sources.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-2">
+            {sources.map((s, i) => (
+              <span key={i} className="text-xs px-1.5 py-0.5 rounded" style={{ background: '#1f2937', color: '#9ca3af', fontSize: '0.65rem' }}>
+                {s}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="rounded-lg p-3 max-h-96 overflow-y-auto" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+          <div className="prose prose-invert prose-xs max-w-none" style={{ color: '#d1d5db', fontSize: '0.7rem', lineHeight: '1.5' }}>
+            <style>{`
+              .prose h1 { font-size: 0.9rem; color: #f9fafb; margin-top: 0.5rem; }
+              .prose h2 { font-size: 0.8rem; color: #f9fafb; margin-top: 0.75rem; border-bottom: 1px solid #1f2937; padding-bottom: 0.25rem; }
+              .prose h3 { font-size: 0.75rem; color: #d1d5db; }
+              .prose strong { color: #f9fafb; }
+              .prose a { color: #3b82f6; }
+              .prose ul, .prose ol { padding-left: 1.2em; }
+              .prose li { margin: 0.15em 0; }
+              .prose blockquote { border-left: 2px solid #374151; padding-left: 0.75em; color: #9ca3af; }
+            `}</style>
+            <ReactMarkdown>{dossier}</ReactMarkdown>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wider mb-1.5" style={{ color: '#6b7280' }}>Sales Intelligence Dossier</p>
+      <button
+        onClick={generateDossier}
+        disabled={loading}
+        className="flex items-center gap-2 justify-center py-3 rounded-lg text-xs font-medium w-full transition-all"
+        style={{
+          background: loading ? 'rgba(59,130,246,0.1)' : 'rgba(59,130,246,0.15)',
+          color: '#3b82f6',
+          border: '1px solid rgba(59,130,246,0.3)',
+          opacity: loading ? 0.8 : 1,
+        }}
+      >
+        {loading ? (
+          <>
+            <Loader2 size={14} className="animate-spin" />
+            Generating dossier (this may take 15-30s)...
+          </>
+        ) : (
+          <>
+            <BookOpen size={14} />
+            Generate Sales Intelligence Dossier
+          </>
+        )}
+      </button>
+      {error && <p className="text-xs mt-1 text-center" style={{ color: '#ef4444' }}>{error}</p>}
+      <p className="text-xs mt-1 text-center" style={{ color: '#374151' }}>
+        Consolidates DB, news, Companies House, and website data via AI
+      </p>
+    </div>
   )
 }
 

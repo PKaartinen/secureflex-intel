@@ -508,6 +508,78 @@ def analyze_prospect(prospect: Dict[str, Any]):
     return {"analysis": analysis}
 
 
+# ── Dossier Endpoints ───────────────────────────────────────────────────────
+
+@app.post("/api/dossier/generate")
+def generate_dossier_endpoint(
+    background_tasks: BackgroundTasks,
+    payload: Dict[str, Any],
+):
+    """Generate a comprehensive Sales Intelligence Dossier for a company.
+    
+    Accepts: { company_name, company_number?, company_type?, region?, sic_codes?, address?, website_url? }
+    Returns: { company_name, generated_at, dossier_markdown, sources_used, data_summary }
+    """
+    company_name = payload.get("company_name", "").strip()
+    if not company_name:
+        raise HTTPException(status_code=400, detail="company_name is required")
+    
+    from secureflex_intel.dossier import generate_dossier
+    result = generate_dossier(
+        company_name=company_name,
+        company_number=payload.get("company_number", ""),
+        company_type=payload.get("company_type", ""),
+        region=payload.get("region", ""),
+        sic_codes=payload.get("sic_codes", ""),
+        address=payload.get("address", ""),
+        website_url=payload.get("website_url", ""),
+    )
+    
+    # Also save the dossier as a brief file for future reference
+    try:
+        safe_name = company_name.lower().replace(" ", "_").replace("/", "_")[:50]
+        filename = f"dossier_{safe_name}.md"
+        briefs_dir = str(settings.briefs_dir)
+        os.makedirs(briefs_dir, exist_ok=True)
+        filepath = os.path.join(briefs_dir, filename)
+        with open(filepath, "w") as f:
+            f.write(result["dossier_markdown"])
+        result["saved_as"] = filename
+    except Exception as e:
+        result["saved_as"] = None
+        print(f"[Dossier] Failed to save brief file: {e}")
+    
+    return result
+
+
+@app.get("/api/dossier/{company_id}")
+def get_saved_dossier(company_id: str):
+    """Get a previously generated dossier for a pipeline lead."""
+    # Look up the lead to get company name
+    try:
+        from secureflex_intel.db import db_available, query_table, pipeline_table
+        if db_available():
+            rows = query_table(pipeline_table, filters={"company_id": company_id}, limit=1)
+            if rows:
+                company_name = rows[0].get("company_name", "")
+                safe_name = company_name.lower().replace(" ", "_").replace("/", "_")[:50]
+                filename = f"dossier_{safe_name}.md"
+                briefs_dir = str(settings.briefs_dir)
+                filepath = os.path.join(briefs_dir, filename)
+                if os.path.exists(filepath):
+                    with open(filepath, "r") as f:
+                        content = f.read()
+                    return {
+                        "company_id": company_id,
+                        "company_name": company_name,
+                        "dossier_markdown": content,
+                        "generated_at": datetime.fromtimestamp(os.path.getmtime(filepath)).isoformat(),
+                    }
+    except Exception:
+        pass
+    raise HTTPException(status_code=404, detail="No dossier found for this lead")
+
+
 # ── Tenders Endpoints ────────────────────────────────────────────────────────
 
 @app.get("/api/tenders")
