@@ -129,53 +129,74 @@ class FTSClient:
             print(f"  ⚠️  FTS Unexpected error: {e}")
             return None
 
+    def _fetch_all_tenders(self, from_date: str, max_pages: int = 20) -> List[Dict]:
+        """Fetch all FTS tenders in date range using cursor pagination."""
+        url = f"{self.base_url}?stages=tender&limit=100&updatedFrom={from_date}"
+        all_releases = []
+        page = 0
+        while url and page < max_pages:
+            page += 1
+            print(f"  📄 FTS page {page}...")
+            data = self._fetch_page(url)
+            if not data:
+                break
+            releases = self._extract_releases(data)
+            if not releases:
+                break
+            all_releases.extend(releases)
+            print(f"    ✅ {len(releases)} releases (total: {len(all_releases)})")
+            # Cursor-based pagination — follow the next link
+            url = data.get("links", {}).get("next")
+            if url:
+                time.sleep(1)
+        return all_releases
+
     def search_tenders(
         self,
         keywords: Optional[List[str]] = None,
         cpv_codes: Optional[List[str]] = None,
         days_back: int = 30,
-        max_pages: int = 5,
+        max_pages: int = 20,
     ) -> List[Dict]:
         """
         Search FTS for security-related tenders.
 
+        Fetches ALL tenders in the date range via cursor-based pagination,
+        then filters client-side using _is_security_related().
+
         Args:
-            keywords: Search keywords (defaults to FTS_SEARCH_KEYWORDS)
-            cpv_codes: CPV codes to search (defaults to FTS_CPV_CODES)
+            keywords: Not used for API query (no text search param), kept for interface compat
+            cpv_codes: CPV codes for filtering (defaults to FTS_CPV_CODES)
             days_back: How many days back to search
-            max_pages: Maximum pages per query
+            max_pages: Maximum pages to fetch
 
         Returns:
             List of parsed tender dicts with scores
         """
-        if keywords is None:
-            keywords = FTS_SEARCH_KEYWORDS
-        if cpv_codes is None:
-            cpv_codes = FTS_CPV_CODES
-
         from_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%dT00:00:00Z")
 
-        all_releases = {}  # Deduplicate by ocid
+        print(f"[FTS] Fetching all tenders since {from_date}...")
+        try:
+            raw_releases = self._fetch_all_tenders(from_date, max_pages=max_pages)
+        except Exception as e:
+            print(f"[FTS] Error fetching tenders: {e}")
+            raw_releases = []
 
-        # Search by keyword
-        for keyword in keywords:
-            print(f"  🔍 FTS searching: '{keyword}'...")
-            releases = self._search_keyword(keyword, from_date, max_pages)
-            new_count = 0
-            for release in releases:
-                ocid = release.get("ocid", release.get("id", ""))
-                if ocid and ocid not in all_releases:
-                    all_releases[ocid] = release
-                    new_count += 1
-            print(f"    ✅ {len(releases)} results, {new_count} new ({len(all_releases)} unique total)")
-            time.sleep(1.5)
+        print(f"[FTS] Fetched {len(raw_releases)} total releases, filtering for security...")
 
-        print(f"[FTS] Total unique releases: {len(all_releases)}")
+        # Deduplicate by ocid
+        unique_releases = {}
+        for release in raw_releases:
+            ocid = release.get("ocid", release.get("id", ""))
+            if ocid and ocid not in unique_releases:
+                unique_releases[ocid] = release
+
+        print(f"[FTS] {len(unique_releases)} unique releases after dedup")
 
         # Parse, filter, and score
         tenders = []
         skipped = 0
-        for ocid, release in all_releases.items():
+        for ocid, release in unique_releases.items():
             parsed = self._parse_release(release)
             if not self._is_security_related(parsed):
                 skipped += 1
@@ -223,44 +244,6 @@ class FTSClient:
         tenders.sort(key=lambda x: x["score"], reverse=True)
         print(f"[FTS] {len(tenders)} security-related tenders (skipped {skipped} non-security)")
         return tenders
-
-    def _search_keyword(self, keyword: str, from_date: str, max_pages: int = 5) -> List[Dict]:
-        """Search FTS by keyword, handling pagination."""
-        params = {
-            "q": keyword,
-            "publishedFrom": from_date,
-            "stage": "tender",
-            "size": 100,
-            "page": 1,
-        }
-
-        all_releases = []
-        page = 0
-
-        while page < max_pages:
-            page += 1
-            params["page"] = page
-            url = f"{self.base_url}?{urlencode(params, quote_via=quote_plus)}"
-
-            data = self._fetch_page(url)
-            if not data:
-                break
-
-            # FTS returns release packages — extract releases
-            releases = self._extract_releases(data)
-            if not releases:
-                break
-
-            all_releases.extend(releases)
-
-            # Check if there are more pages
-            total = data.get("total", 0)
-            if len(all_releases) >= total:
-                break
-
-            time.sleep(1)
-
-        return all_releases
 
     def _extract_releases(self, data: Dict) -> List[Dict]:
         """Extract OCDS releases from FTS response format."""
@@ -539,8 +522,12 @@ def run_scan(days_back: int = None) -> List[Dict]:
 
     print(f"[FTS] Starting Find a Tender Service scan ({days_back} days back)")
 
-    client = FTSClient()
-    tenders = client.search_tenders(days_back=days_back)
+    try:
+        client = FTSClient()
+        tenders = client.search_tenders(days_back=days_back)
+    except Exception as e:
+        print(f"[FTS] Scan failed with error: {e}")
+        tenders = []
 
     # Save to database
     if tenders:

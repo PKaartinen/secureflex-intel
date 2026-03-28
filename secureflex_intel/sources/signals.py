@@ -85,11 +85,8 @@ NEWS_SEARCH_QUERIES = [
     '"security firm" London problem',
 ]
 
-# Indeed RSS base URL (public, no API key needed)
-INDEED_RSS_BASE = "https://www.indeed.co.uk/rss"
-
-# Reed RSS base URL (public, no API key needed)
-REED_RSS_BASE = "https://www.reed.co.uk/api/1.0/search"
+# Adzuna Job Search API (replaces deprecated Indeed + Reed RSS feeds)
+ADZUNA_API_BASE = "https://api.adzuna.com/v1/api/jobs/gb/search"
 
 # Google News RSS
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
@@ -208,26 +205,21 @@ def scan_job_postings():
     3. FM companies managing security = potential clients
 
     Each posting is a buying signal.
+
+    Uses Adzuna API (replaces deprecated Indeed + Reed RSS feeds).
     """
     print("\n🔍 Scanning job postings for security intent signals...")
 
     all_signals = []
 
     for query in JOB_SEARCH_QUERIES:
-        print(f"  📋 Searching Indeed: '{query}'...")
-        signals = fetch_indeed_rss(query)
+        print(f"  📋 Searching Adzuna: '{query}'...")
+        signals = fetch_adzuna_jobs(query)
         if signals:
             all_signals.extend(signals)
             print(f"    → {len(signals)} postings found")
         else:
-            # Fallback: try Reed RSS
-            print(f"    → Indeed unavailable, trying Reed...")
-            reed_signals = fetch_reed_rss(query)
-            if reed_signals:
-                all_signals.extend(reed_signals)
-                print(f"    → {len(reed_signals)} Reed postings found")
-            else:
-                print(f"    → No results from either source")
+            print(f"    → No results")
         time.sleep(1)
 
     # Deduplicate by title + company
@@ -250,54 +242,72 @@ def scan_job_postings():
     return unique_signals
 
 
-def fetch_indeed_rss(query):
-    """Fetch job postings from Indeed RSS feed."""
-    params = {
-        "q": query,
-        "l": "London",
-        "sort": "date",
-        "fromage": "14",  # Last 14 days
-    }
-    url = f"{INDEED_RSS_BASE}?{urlencode(params)}"
+def fetch_adzuna_jobs(query):
+    """
+    Fetch job postings from the Adzuna API.
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/rss+xml, application/xml, text/xml, */*",
-        "Accept-Language": "en-GB,en;q=0.9",
-    }
-
-    try:
-        req = Request(url, headers=headers)
-        with urlopen(req, timeout=15) as response:
-            content = response.read()
-            signals = parse_rss_jobs(content, "Indeed")
-            return signals
-    except Exception:
+    Replaces the deprecated Indeed RSS and Reed RSS feeds.
+    Gracefully degrades if API keys are not configured or API returns errors.
+    """
+    # ── Graceful degradation: check API keys ─────────────────────────────
+    if not settings.adzuna_app_id or not settings.adzuna_app_key:
+        print("[Adzuna] API keys not configured — skipping job signal scan")
         return []
 
+    # Extract keyword and location from the query string
+    # Queries are like "security manager London" — split off "London" if present
+    query_lower = query.strip()
+    location = "london"
+    what = query_lower
+    if query_lower.lower().endswith(" london"):
+        what = query_lower[:-len(" london")].strip()
+        location = "london"
 
-def fetch_reed_rss(query):
-    """Fetch job postings from Reed RSS feed as fallback."""
-    # Reed provides a public RSS/search endpoint
     params = {
-        "keywords": query,
-        "locationName": "London",
-        "distanceFromLocation": 10,
+        "app_id": settings.adzuna_app_id,
+        "app_key": settings.adzuna_app_key,
+        "what": what,
+        "where": location,
+        "results_per_page": 20,
+        "max_days_old": 14,
+        "sort_by": "date",
     }
-    # Reed RSS URL
-    url = f"https://www.reed.co.uk/jobs/rss?{urlencode(params)}"
+    url = f"{ADZUNA_API_BASE}/1?{urlencode(params)}"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+        "User-Agent": "SecureFlex-Intel/1.0 (Job Signal Scanner)",
+        "Accept": "application/json",
     }
 
     try:
         req = Request(url, headers=headers)
         with urlopen(req, timeout=15) as response:
-            content = response.read()
-            return parse_rss_jobs(content, "Reed")
-    except Exception:
+            data = json.loads(response.read().decode("utf-8"))
+
+        results = data.get("results", [])
+        signals = []
+        for result in results:
+            title = result.get("title", "")
+            company = result.get("company", {}).get("display_name", "")
+            signals.append({
+                "source": "Adzuna",
+                "title": title,
+                "company": company,
+                "description": (result.get("description", "") or "")[:300],
+                "link": result.get("redirect_url", ""),
+                "published": result.get("created", ""),
+                "signal_category": "job_posting",
+            })
+        return signals
+
+    except HTTPError as e:
+        print(f"[Adzuna] HTTP Error {e.code} for query '{query}': {e.reason}")
+        return []
+    except URLError as e:
+        print(f"[Adzuna] URL Error for query '{query}': {e.reason}")
+        return []
+    except Exception as e:
+        print(f"[Adzuna] Unexpected error for query '{query}': {e}")
         return []
 
 

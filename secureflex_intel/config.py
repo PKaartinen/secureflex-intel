@@ -40,6 +40,18 @@ class Settings:
     def anthropic_api_key(self) -> str:
         return os.environ.get("ANTHROPIC_API_KEY", "")
 
+    @property
+    def adzuna_app_id(self) -> str:
+        return os.environ.get("ADZUNA_APP_ID", "")
+
+    @property
+    def adzuna_app_key(self) -> str:
+        return os.environ.get("ADZUNA_APP_KEY", "")
+
+    @property
+    def twfy_api_key(self) -> str:
+        return os.environ.get("TWFY_API_KEY", "")
+
     # ── Paths ────────────────────────────────────────────────────────────
     @property
     def data_dir(self) -> Path:
