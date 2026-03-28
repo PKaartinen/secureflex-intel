@@ -9,7 +9,9 @@ import {
   ScanLine, Settings, Database, BookOpen, Info,
   Play, RefreshCw, CheckCircle2, XCircle, Clock, AlertTriangle,
   ToggleLeft, ToggleRight, ChevronRight, Loader2,
+  Users, Mail, UserPlus, Eye, EyeOff, Key, Send,
 } from 'lucide-react'
+import { useAuth } from '../auth'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -654,13 +656,349 @@ function AboutTab() {
   )
 }
 
-// ── Main Component ────────────────────────────────────────────────────────────
+// ── Tab: Users (admin) ──────────────────────────────────────────────────
+
+function UsersTab() {
+  const { user: currentUser } = useAuth()
+  const queryClient = useQueryClient()
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState({ username: '', password: '', email: '', role: 'viewer' })
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  // Change password state
+  const [showPwChange, setShowPwChange] = useState(false)
+  const [pwForm, setPwForm] = useState({ old_password: '', new_password: '' })
+  const [pwError, setPwError] = useState('')
+  const [pwSuccess, setPwSuccess] = useState('')
+  const [showOld, setShowOld] = useState(false)
+  const [showNew, setShowNew] = useState(false)
+
+  const isAdmin = currentUser?.role === 'admin'
+
+  const { data: usersData, isLoading } = useQuery({
+    queryKey: ['auth-users'],
+    queryFn: api.authUsers,
+    enabled: isAdmin,
+  })
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setSuccess('')
+    try {
+      await api.authRegister(form)
+      setSuccess(`User "${form.username}" created`)
+      setForm({ username: '', password: '', email: '', role: 'viewer' })
+      setShowForm(false)
+      queryClient.invalidateQueries({ queryKey: ['auth-users'] })
+    } catch (err: any) {
+      setError(err?.message || 'Failed to create user')
+    }
+  }
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setPwError('')
+    setPwSuccess('')
+    try {
+      await api.authChangePassword(pwForm.old_password, pwForm.new_password)
+      setPwSuccess('Password changed successfully')
+      setPwForm({ old_password: '', new_password: '' })
+      setShowPwChange(false)
+    } catch (err: any) {
+      setPwError(err?.message || 'Failed to change password')
+    }
+  }
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      {/* Change own password */}
+      <div className="rounded-lg p-5" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <p className="text-sm font-semibold" style={{ color: '#f9fafb' }}>Your Account</p>
+            <p className="text-xs mt-0.5" style={{ color: '#6b7280' }}>
+              Signed in as <strong style={{ color: '#f9fafb' }}>{currentUser?.username}</strong> ({currentUser?.role})
+            </p>
+          </div>
+          <button
+            onClick={() => setShowPwChange(!showPwChange)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+            style={{ background: 'rgba(107,114,128,0.15)', color: '#9ca3af', border: '1px solid rgba(107,114,128,0.3)' }}
+          >
+            <Key size={12} /> Change Password
+          </button>
+        </div>
+
+        {showPwChange && (
+          <form onSubmit={handleChangePassword} className="space-y-3 mt-3 pt-3" style={{ borderTop: '1px solid #1f2937' }}>
+            <div className="relative">
+              <label className="block text-xs mb-1" style={{ color: '#6b7280' }}>Current Password</label>
+              <input
+                type={showOld ? 'text' : 'password'}
+                value={pwForm.old_password}
+                onChange={e => setPwForm(f => ({ ...f, old_password: e.target.value }))}
+                required
+                className="w-full text-xs rounded px-3 py-2 border pr-8"
+                style={{ background: '#0d1117', color: '#f9fafb', borderColor: '#374151' }}
+              />
+              <button type="button" onClick={() => setShowOld(!showOld)} className="absolute right-2 top-7" style={{ color: '#4b5563' }}>
+                {showOld ? <EyeOff size={12} /> : <Eye size={12} />}
+              </button>
+            </div>
+            <div className="relative">
+              <label className="block text-xs mb-1" style={{ color: '#6b7280' }}>New Password (min 8 chars)</label>
+              <input
+                type={showNew ? 'text' : 'password'}
+                value={pwForm.new_password}
+                onChange={e => setPwForm(f => ({ ...f, new_password: e.target.value }))}
+                required
+                minLength={8}
+                className="w-full text-xs rounded px-3 py-2 border pr-8"
+                style={{ background: '#0d1117', color: '#f9fafb', borderColor: '#374151' }}
+              />
+              <button type="button" onClick={() => setShowNew(!showNew)} className="absolute right-2 top-7" style={{ color: '#4b5563' }}>
+                {showNew ? <EyeOff size={12} /> : <Eye size={12} />}
+              </button>
+            </div>
+            {pwError && <p className="text-xs" style={{ color: '#ef4444' }}>{pwError}</p>}
+            {pwSuccess && <p className="text-xs" style={{ color: '#22c55e' }}>{pwSuccess}</p>}
+            <button type="submit" className="px-4 py-1.5 rounded-lg text-xs font-medium" style={{ background: 'rgba(59,130,246,0.2)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
+              Update Password
+            </button>
+          </form>
+        )}
+      </div>
+
+      {/* Admin: User list */}
+      {isAdmin && (
+        <div className="rounded-lg p-5" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-sm font-semibold" style={{ color: '#f9fafb' }}>User Management</p>
+              <p className="text-xs mt-0.5" style={{ color: '#6b7280' }}>Admin only — create and manage platform users</p>
+            </div>
+            <button
+              onClick={() => setShowForm(!showForm)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+              style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}
+            >
+              <UserPlus size={12} /> Add User
+            </button>
+          </div>
+
+          {showForm && (
+            <form onSubmit={handleCreate} className="space-y-3 mb-4 p-4 rounded-lg" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: '#6b7280' }}>Username *</label>
+                  <input type="text" value={form.username} onChange={e => setForm(f => ({ ...f, username: e.target.value }))} required
+                    className="w-full text-xs rounded px-2.5 py-2 border" style={{ background: '#111827', color: '#f9fafb', borderColor: '#374151' }} />
+                </div>
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: '#6b7280' }}>Password *</label>
+                  <input type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} required minLength={8}
+                    className="w-full text-xs rounded px-2.5 py-2 border" style={{ background: '#111827', color: '#f9fafb', borderColor: '#374151' }} />
+                </div>
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: '#6b7280' }}>Email</label>
+                  <input type="email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))}
+                    className="w-full text-xs rounded px-2.5 py-2 border" style={{ background: '#111827', color: '#f9fafb', borderColor: '#374151' }} />
+                </div>
+                <div>
+                  <label className="block text-xs mb-1" style={{ color: '#6b7280' }}>Role</label>
+                  <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
+                    className="w-full text-xs rounded px-2.5 py-2 border" style={{ background: '#111827', color: '#f9fafb', borderColor: '#374151' }}>
+                    <option value="viewer">Viewer</option>
+                    <option value="editor">Editor</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </div>
+              </div>
+              {error && <p className="text-xs" style={{ color: '#ef4444' }}>{error}</p>}
+              {success && <p className="text-xs" style={{ color: '#22c55e' }}>{success}</p>}
+              <button type="submit" className="px-4 py-1.5 rounded-lg text-xs font-medium" style={{ background: 'rgba(34,197,94,0.2)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}>
+                Create User
+              </button>
+            </form>
+          )}
+
+          {isLoading ? <LoadingSpinner /> : (
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #1f2937' }}>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr style={{ background: '#0d1117', borderBottom: '1px solid #1f2937' }}>
+                    {['Username', 'Email', 'Role', 'Active', 'Last Login'].map(h => (
+                      <th key={h} className="text-left px-4 py-2.5 font-medium" style={{ color: '#6b7280' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {(usersData?.users || []).map(u => (
+                    <tr key={u.id || u.username} style={{ borderBottom: '1px solid #111827' }}>
+                      <td className="px-4 py-2.5 font-medium" style={{ color: '#f9fafb' }}>{u.username}</td>
+                      <td className="px-4 py-2.5" style={{ color: '#6b7280' }}>{u.email || '—'}</td>
+                      <td className="px-4 py-2.5">
+                        <span className="px-1.5 py-0.5 rounded text-xs"
+                          style={{
+                            background: u.role === 'admin' ? 'rgba(239,68,68,0.1)' : u.role === 'editor' ? 'rgba(59,130,246,0.1)' : 'rgba(107,114,128,0.1)',
+                            color: u.role === 'admin' ? '#ef4444' : u.role === 'editor' ? '#3b82f6' : '#6b7280',
+                          }}>
+                          {u.role}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <span className="px-1.5 py-0.5 rounded text-xs"
+                          style={{ background: u.is_active ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)', color: u.is_active ? '#22c55e' : '#ef4444' }}>
+                          {u.is_active ? 'Yes' : 'No'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5" style={{ color: '#6b7280' }}>
+                        {u.last_login ? new Date(u.last_login).toLocaleString() : 'Never'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Tab: Email Digest ───────────────────────────────────────────────────
+
+function DigestTab() {
+  const { user: currentUser } = useAuth()
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [sendResult, setSendResult] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+
+  const isAdmin = currentUser?.role === 'admin'
+
+  const { data: digestSettings } = useQuery({
+    queryKey: ['digest-settings'],
+    queryFn: api.digestSettings,
+  })
+
+  const handlePreview = async () => {
+    setLoading(true)
+    try {
+      const res = await api.digestPreview()
+      setPreviewHtml(res.html)
+    } catch (err: any) {
+      setPreviewHtml(`<p style="color:red;">Error: ${err?.message || 'Failed to generate preview'}</p>`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleSend = async () => {
+    setSending(true)
+    setSendResult(null)
+    try {
+      const res = await api.digestSend()
+      if (res.status === 'sent') {
+        setSendResult(`Digest sent to ${(res.recipients || []).join(', ')}`)
+      } else {
+        setSendResult(`${res.status}: ${res.error || 'Unknown'}`)
+      }
+    } catch (err: any) {
+      setSendResult(`Error: ${err?.message || 'Failed to send'}`)
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6 max-w-4xl">
+      {/* Settings overview */}
+      <div className="rounded-lg p-5" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+        <p className="text-sm font-semibold mb-4" style={{ color: '#f9fafb' }}>Email Digest Configuration</p>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { label: 'Enabled', value: digestSettings?.enabled ? 'Yes' : 'No' },
+            { label: 'Schedule', value: `${digestSettings?.day || 'monday'} at ${digestSettings?.hour ?? 8}:00 UTC` },
+            { label: 'SMTP Configured', value: digestSettings?.smtp_configured ? 'Yes' : 'No' },
+            { label: 'Recipients', value: (digestSettings?.recipients || []).join(', ') || 'None configured' },
+          ].map(({ label, value }) => (
+            <div key={label} className="rounded p-3" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
+              <p className="text-xs" style={{ color: '#6b7280' }}>{label}</p>
+              <p className="text-xs font-mono mt-1" style={{ color: '#f9fafb' }}>{value}</p>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs mt-3" style={{ color: '#4b5563' }}>
+          Configure via environment variables: DIGEST_ENABLED, DIGEST_DAY, DIGEST_HOUR, DIGEST_RECIPIENTS, SMTP_HOST, SMTP_USER, SMTP_PASSWORD
+        </p>
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handlePreview}
+          disabled={loading}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-all"
+          style={{ background: 'rgba(59,130,246,0.2)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)', opacity: loading ? 0.7 : 1 }}
+        >
+          {loading ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}
+          {loading ? 'Generating...' : 'Preview Digest'}
+        </button>
+
+        {isAdmin && (
+          <button
+            onClick={handleSend}
+            disabled={sending}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-medium transition-all"
+            style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)', opacity: sending ? 0.7 : 1 }}
+          >
+            {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+            {sending ? 'Sending...' : 'Send Now'}
+          </button>
+        )}
+      </div>
+
+      {sendResult && (
+        <div className="rounded-lg px-4 py-3 text-xs"
+          style={{ background: sendResult.startsWith('Digest sent') ? 'rgba(34,197,94,0.1)' : 'rgba(239,68,68,0.1)',
+                   color: sendResult.startsWith('Digest sent') ? '#22c55e' : '#ef4444',
+                   border: `1px solid ${sendResult.startsWith('Digest sent') ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}` }}>
+          {sendResult}
+        </div>
+      )}
+
+      {/* Preview iframe */}
+      {previewHtml && (
+        <div className="rounded-lg overflow-hidden" style={{ border: '1px solid #1f2937' }}>
+          <div className="px-4 py-2 flex items-center justify-between" style={{ background: '#111827', borderBottom: '1px solid #1f2937' }}>
+            <p className="text-xs font-medium" style={{ color: '#9ca3af' }}>Digest Preview</p>
+            <button onClick={() => setPreviewHtml(null)} className="text-xs" style={{ color: '#6b7280' }}>Close</button>
+          </div>
+          <iframe
+            srcDoc={previewHtml}
+            className="w-full"
+            style={{ height: 600, border: 'none', background: '#0d1117' }}
+            title="Digest Preview"
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Main Component ──────────────────────────────────────────────────────
 
 const TABS = [
   { key: 'scans',     label: 'Scans',           icon: ScanLine   },
   { key: 'config',    label: 'Configuration',   icon: Settings   },
   { key: 'health',    label: 'Data Health',      icon: Database   },
   { key: 'dossiers',  label: 'Dossier Library',  icon: BookOpen   },
+  { key: 'users',     label: 'Users',            icon: Users      },
+  { key: 'digest',    label: 'Email Digest',     icon: Mail       },
   { key: 'about',     label: 'About',            icon: Info       },
 ]
 
@@ -701,6 +1039,8 @@ export default function System() {
         {activeTab === 'config'   && <ConfigurationTab />}
         {activeTab === 'health'   && <DataHealthTab />}
         {activeTab === 'dossiers' && <DossierLibraryTab />}
+        {activeTab === 'users'    && <UsersTab />}
+        {activeTab === 'digest'   && <DigestTab />}
         {activeTab === 'about'    && <AboutTab />}
       </div>
     </div>

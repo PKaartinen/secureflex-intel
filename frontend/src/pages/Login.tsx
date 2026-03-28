@@ -14,13 +14,16 @@ export default function Login() {
     e.preventDefault()
     setError('')
     setLoading(true)
-    // Small artificial delay for UX
-    await new Promise(r => setTimeout(r, 400))
-    const ok = login(username, password)
-    if (!ok) {
-      setError('Invalid username or password.')
+    try {
+      const ok = await login(username, password)
+      if (!ok) {
+        setError('Invalid username or password.')
+      }
+    } catch {
+      setError('Connection error. Please try again.')
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (

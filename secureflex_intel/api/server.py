@@ -22,16 +22,124 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 try:
-    from fastapi import FastAPI, Query, BackgroundTasks, HTTPException
+    from fastapi import FastAPI, Query, BackgroundTasks, HTTPException, Depends, Request
     from fastapi.middleware.cors import CORSMiddleware
     from fastapi.responses import JSONResponse, FileResponse
     from fastapi.staticfiles import StaticFiles
+    from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 except ImportError:
     print("FastAPI not installed. Run: pip install fastapi uvicorn")
     print("Or: pip install secureflex-intel[server]")
     sys.exit(1)
 
+try:
+    from jose import jwt, JWTError
+    from passlib.context import CryptContext
+    HAS_AUTH = True
+except ImportError:
+    HAS_AUTH = False
+
 from secureflex_intel.config import settings
+
+# ── Auth Setup ──────────────────────────────────────────────────────────────
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto") if HAS_AUTH else None
+security = HTTPBearer(auto_error=False)
+
+# Paths that do NOT require authentication
+_PUBLIC_PATHS = {
+    "/api/auth/login",
+    "/api/health",
+}
+_PUBLIC_PREFIXES = (
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+)
+
+
+def _create_access_token(data: dict) -> str:
+    """Create a JWT access token."""
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(hours=settings.jwt_expiry_hours)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, settings.jwt_secret_key, algorithm="HS256")
+
+
+def _verify_token(token: str) -> Optional[dict]:
+    """Decode and verify a JWT token. Returns payload or None."""
+    try:
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=["HS256"])
+        return payload
+    except (JWTError, Exception):
+        return None
+
+
+async def get_current_user(
+    request: Request,
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> Optional[dict]:
+    """FastAPI dependency — extracts and validates user from JWT.
+    Returns user dict or None for public routes.
+    Raises 401 for protected routes without valid token."""
+    path = request.url.path
+
+    # Allow public paths
+    if path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
+        return None
+
+    # Non-API paths (static files, SPA) — no auth needed
+    if not path.startswith("/api/"):
+        return None
+
+    if not HAS_AUTH:
+        return None  # Auth libs not installed — degrade gracefully
+
+    token = None
+    if credentials:
+        token = credentials.credentials
+    if not token:
+        # Also check query param for export endpoints
+        token = request.query_params.get("token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    payload = _verify_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    username = payload.get("sub")
+    if not username:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    # Fetch user from DB
+    try:
+        from secureflex_intel.db import get_engine, users_table
+        engine = get_engine()
+        if engine:
+            from sqlalchemy import select as sa_select
+            with engine.connect() as conn:
+                row = conn.execute(
+                    sa_select(users_table).where(users_table.c.username == username)
+                ).first()
+                if row:
+                    u = dict(row._mapping)
+                    if not u.get("is_active", True):
+                        raise HTTPException(status_code=401, detail="Account disabled")
+                    return {
+                        "id": u["id"],
+                        "username": u["username"],
+                        "email": u.get("email", ""),
+                        "role": u.get("role", "viewer"),
+                    }
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    # If DB not available, trust token payload
+    return {"username": username, "role": payload.get("role", "viewer")}
+
 
 # ── App Setup ────────────────────────────────────────────────────────────────
 
@@ -152,7 +260,46 @@ def startup_event():
     if settings.auto_scan:
         _start_scheduler()
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+    # Start digest scheduler if configured
+    if settings.digest_enabled:
+        _start_digest_scheduler()
+
+
+# ── Digest Scheduler ───────────────────────────────────────────────────────
+
+_digest_state = {"enabled": False, "thread": None}
+
+def _digest_scheduler_loop():
+    """Background thread that checks daily if it's time to send the digest."""
+    import time as _time
+    day_map = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+               "friday": 4, "saturday": 5, "sunday": 6}
+    target_day = day_map.get(settings.digest_day.lower(), 0)
+    target_hour = settings.digest_hour
+    while _digest_state["enabled"]:
+        now = datetime.utcnow()
+        if now.weekday() == target_day and now.hour == target_hour and now.minute < 5:
+            try:
+                from secureflex_intel.email_digest import EmailDigest
+                result = EmailDigest().send_digest()
+                print(f"[Digest] Sent: {result}")
+            except Exception as e:
+                print(f"[Digest] Error: {e}")
+            _time.sleep(3600)
+        else:
+            _time.sleep(60)
+
+def _start_digest_scheduler():
+    if _digest_state["thread"] and _digest_state["thread"].is_alive():
+        return
+    _digest_state["enabled"] = True
+    t = threading.Thread(target=_digest_scheduler_loop, daemon=True, name="digest-scheduler")
+    t.start()
+    _digest_state["thread"] = t
+    print(f"[Digest] Scheduler started: {settings.digest_day} at {settings.digest_hour}:00")
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────
 
 def read_csv_as_dicts(filepath: str) -> List[Dict[str, str]]:
     """Read a CSV file and return list of dicts."""
@@ -257,10 +404,238 @@ def _type_to_color(company_type: str) -> str:
     return "#6b7280"
 
 
+# ── Auth Endpoints ──────────────────────────────────────────────────────────
+
+@app.post("/api/auth/login")
+def auth_login(payload: Dict[str, Any]):
+    """Authenticate user and return JWT token."""
+    username = payload.get("username", "").strip()
+    password = payload.get("password", "")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password required")
+
+    try:
+        from secureflex_intel.db import get_engine, users_table
+        from sqlalchemy import select as sa_select, update as sa_update
+        engine = get_engine()
+        if engine:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    sa_select(users_table).where(
+                        users_table.c.username.ilike(username)
+                    )
+                ).first()
+                if not row:
+                    raise HTTPException(status_code=401, detail="Invalid credentials")
+                u = dict(row._mapping)
+                if not u.get("is_active", True):
+                    raise HTTPException(status_code=401, detail="Account disabled")
+                if not pwd_context or not pwd_context.verify(password, u["password_hash"]):
+                    raise HTTPException(status_code=401, detail="Invalid credentials")
+
+            # Update last_login
+            with engine.begin() as conn:
+                conn.execute(
+                    sa_update(users_table)
+                    .where(users_table.c.id == u["id"])
+                    .values(last_login=datetime.utcnow())
+                )
+
+            token = _create_access_token({"sub": u["username"], "role": u.get("role", "viewer")})
+            return {
+                "access_token": token,
+                "token_type": "bearer",
+                "user": {
+                    "username": u["username"],
+                    "role": u.get("role", "viewer"),
+                    "email": u.get("email", ""),
+                },
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/auth/me")
+def auth_me(current_user: dict = Depends(get_current_user)):
+    """Return current authenticated user."""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return current_user
+
+
+@app.post("/api/auth/register")
+def auth_register(payload: Dict[str, Any], current_user: dict = Depends(get_current_user)):
+    """Create a new user (admin only)."""
+    if not current_user or current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    username = payload.get("username", "").strip()
+    password = payload.get("password", "")
+    email = payload.get("email", "")
+    role = payload.get("role", "viewer")
+
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password required")
+    if role not in ("admin", "editor", "viewer"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+
+    try:
+        from secureflex_intel.db import get_engine, users_table
+        from sqlalchemy import insert as sa_insert, select as sa_select
+        engine = get_engine()
+        if engine:
+            with engine.connect() as conn:
+                existing = conn.execute(
+                    sa_select(users_table).where(users_table.c.username.ilike(username))
+                ).first()
+                if existing:
+                    raise HTTPException(status_code=409, detail="Username already exists")
+
+            hashed = pwd_context.hash(password)
+            with engine.begin() as conn:
+                conn.execute(
+                    sa_insert(users_table).values(
+                        username=username,
+                        email=email,
+                        password_hash=hashed,
+                        role=role,
+                        is_active=True,
+                        created_at=datetime.utcnow(),
+                    )
+                )
+            return {"status": "created", "username": username, "role": role}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/auth/change-password")
+def auth_change_password(payload: Dict[str, Any], current_user: dict = Depends(get_current_user)):
+    """Change own password."""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    old_password = payload.get("old_password", "")
+    new_password = payload.get("new_password", "")
+    if not old_password or not new_password:
+        raise HTTPException(status_code=400, detail="Old and new password required")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    try:
+        from secureflex_intel.db import get_engine, users_table
+        from sqlalchemy import select as sa_select, update as sa_update
+        engine = get_engine()
+        if engine:
+            with engine.connect() as conn:
+                row = conn.execute(
+                    sa_select(users_table).where(users_table.c.username == current_user["username"])
+                ).first()
+                if not row:
+                    raise HTTPException(status_code=404, detail="User not found")
+                u = dict(row._mapping)
+
+            if not pwd_context.verify(old_password, u["password_hash"]):
+                raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+            hashed = pwd_context.hash(new_password)
+            with engine.begin() as conn:
+                conn.execute(
+                    sa_update(users_table)
+                    .where(users_table.c.username == current_user["username"])
+                    .values(password_hash=hashed)
+                )
+            return {"status": "password_changed"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/auth/users")
+def auth_list_users(current_user: dict = Depends(get_current_user)):
+    """List all users (admin only)."""
+    if not current_user or current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+
+    try:
+        from secureflex_intel.db import get_engine, users_table
+        from sqlalchemy import select as sa_select
+        engine = get_engine()
+        if engine:
+            with engine.connect() as conn:
+                rows = conn.execute(sa_select(users_table).order_by(users_table.c.id)).fetchall()
+                users = []
+                for r in rows:
+                    u = dict(r._mapping)
+                    users.append({
+                        "id": u["id"],
+                        "username": u["username"],
+                        "email": u.get("email", ""),
+                        "role": u.get("role", "viewer"),
+                        "is_active": u.get("is_active", True),
+                        "created_at": u["created_at"].isoformat() if u.get("created_at") else None,
+                        "last_login": u["last_login"].isoformat() if u.get("last_login") else None,
+                    })
+                return {"users": users, "total": len(users)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/health")
+def health_check():
+    """Public health check endpoint."""
+    return {"status": "ok", "timestamp": datetime.utcnow().isoformat() + "Z"}
+
+
+# ── Digest Endpoints ─────────────────────────────────────────────────────────
+
+@app.post("/api/digest/preview")
+def digest_preview(current_user: dict = Depends(get_current_user)):
+    """Generate and return the HTML digest content for preview."""
+    try:
+        from secureflex_intel.email_digest import EmailDigest
+        html = EmailDigest().generate_digest()
+        return {"html": html}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/digest/send")
+def digest_send(current_user: dict = Depends(get_current_user)):
+    """Manually trigger sending the weekly digest."""
+    if not current_user or current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    try:
+        from secureflex_intel.email_digest import EmailDigest
+        result = EmailDigest().send_digest()
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/digest/settings")
+def digest_settings(current_user: dict = Depends(get_current_user)):
+    """Return current digest configuration."""
+    recipients = settings.digest_recipients
+    return {
+        "enabled": settings.digest_enabled,
+        "day": settings.digest_day,
+        "hour": settings.digest_hour,
+        "recipients": [e.strip() for e in recipients.split(",") if e.strip()] if recipients else [],
+        "smtp_configured": bool(settings.smtp_host and settings.smtp_user),
+    }
+
+
 # ── Status Endpoint ──────────────────────────────────────────────────────────
 
 @app.get("/api/status")
-def get_status():
+def get_status(current_user: dict = Depends(get_current_user)):
     """System health check — API keys, paths, file counts."""
     settings.ensure_dirs()
     pipeline_path = str(settings.pipeline_path)
@@ -324,7 +699,7 @@ def get_status():
 # ── Pipeline / Leads Endpoints ───────────────────────────────────────────────
 
 @app.get("/api/pipeline/stats")
-def get_pipeline_stats():
+def get_pipeline_stats(current_user: dict = Depends(get_current_user)):
     """Pipeline statistics — counts by status, tier, type."""
     # DB path
     try:
@@ -367,7 +742,7 @@ def get_pipeline(
     company_type: Optional[str] = None,
     sort_by: str = "last_modified",
     limit: int = 100,
-):
+    current_user: dict = Depends(get_current_user)):
     """Get pipeline leads with optional filtering."""
     # DB path
     try:
@@ -398,7 +773,7 @@ def get_pipeline(
 
 
 @app.get("/api/pipeline/{company_id}/activity")
-def get_pipeline_activity(company_id: str):
+def get_pipeline_activity(company_id: str, current_user: dict = Depends(get_current_user)):
     """Return the activity log for a pipeline lead."""
     try:
         from secureflex_intel.db import db_available, get_engine, pipeline_table
@@ -425,7 +800,7 @@ def get_pipeline_activity(company_id: str):
 
 
 @app.get("/api/pipeline/{company_id}")
-def get_pipeline_lead(company_id: str):
+def get_pipeline_lead(company_id: str, current_user: dict = Depends(get_current_user)):
     """Get a single pipeline lead by company_id."""
     try:
         from secureflex_intel.db import db_available, query_table, pipeline_table
@@ -444,7 +819,7 @@ def get_pipeline_lead(company_id: str):
 
 
 @app.post("/api/pipeline")
-def create_pipeline_lead(payload: Dict[str, Any], background_tasks: BackgroundTasks):
+def create_pipeline_lead(payload: Dict[str, Any], background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Create a new pipeline lead. Auto-triggers dossier generation."""
     company_name = payload.get("company_name", "").strip()
     if not company_name:
@@ -494,13 +869,13 @@ def create_pipeline_lead(payload: Dict[str, Any], background_tasks: BackgroundTa
 
 
 @app.put("/api/pipeline/{company_id}")
-def update_pipeline_lead(company_id: str, payload: Dict[str, Any]):
+def update_pipeline_lead(company_id: str, payload: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """Update an existing pipeline lead (legacy PUT)."""
     return _patch_pipeline_lead(company_id, payload)
 
 
 @app.patch("/api/pipeline/{company_id}")
-def patch_pipeline_lead(company_id: str, payload: Dict[str, Any]):
+def patch_pipeline_lead(company_id: str, payload: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """Partial update of a pipeline lead with activity logging."""
     return _patch_pipeline_lead(company_id, payload)
 
@@ -582,7 +957,7 @@ def _patch_pipeline_lead(company_id: str, payload: Dict[str, Any]):
 
 
 @app.post("/api/pipeline/bulk-update")
-def bulk_update_pipeline(payload: Dict[str, Any]):
+def bulk_update_pipeline(payload: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """Bulk update multiple pipeline leads. Payload: { company_ids: [...], updates: { status?, tier? } }"""
     company_ids = payload.get("company_ids", [])
     updates = payload.get("updates", {})
@@ -645,7 +1020,7 @@ def bulk_update_pipeline(payload: Dict[str, Any]):
 
 
 @app.post("/api/pipeline/bulk-delete")
-def bulk_delete_pipeline(payload: Dict[str, Any]):
+def bulk_delete_pipeline(payload: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """Bulk delete (archive) multiple pipeline leads."""
     company_ids = payload.get("company_ids", [])
     if not company_ids:
@@ -670,7 +1045,7 @@ def bulk_delete_pipeline(payload: Dict[str, Any]):
 
 
 @app.delete("/api/pipeline/{company_id}")
-def delete_pipeline_lead(company_id: str):
+def delete_pipeline_lead(company_id: str, current_user: dict = Depends(get_current_user)):
     """Delete a pipeline lead."""
     try:
         from secureflex_intel.db import db_available, get_engine, pipeline_table
@@ -690,13 +1065,13 @@ def delete_pipeline_lead(company_id: str):
 # ── AI Endpoints ─────────────────────────────────────────────────────────────
 
 @app.get("/api/ai/status")
-def ai_status():
+def ai_status(current_user: dict = Depends(get_current_user)):
     """Check if AI (Anthropic) is available."""
     return {"available": bool(settings.anthropic_api_key)}
 
 
 @app.post("/api/ai/analyze/tender")
-def ai_analyze_tender(payload: Dict[str, Any]):
+def ai_analyze_tender(payload: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """AI analysis of a tender opportunity."""
     try:
         from secureflex_intel.ai import analyze_tender
@@ -707,7 +1082,7 @@ def ai_analyze_tender(payload: Dict[str, Any]):
 
 
 @app.post("/api/ai/analyze/prospect")
-def ai_analyze_prospect(payload: Dict[str, Any]):
+def ai_analyze_prospect(payload: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """AI analysis of a prospect company."""
     try:
         from secureflex_intel.ai import analyze_prospect
@@ -776,7 +1151,7 @@ def _save_dossier_to_db(result: dict, company_number: str, company_type: str, re
 def generate_dossier_endpoint(
     background_tasks: BackgroundTasks,
     payload: Dict[str, Any],
-):
+    current_user: dict = Depends(get_current_user)):
     """Generate a comprehensive Sales Intelligence Dossier for a company.
     
     Accepts: { company_name, company_number?, company_type?, region?, sic_codes?, address?, website_url? }
@@ -809,7 +1184,7 @@ def generate_dossier_endpoint(
 
 
 @app.get("/api/dossier/by-company/{company_key}")
-def get_dossier_by_company(company_key: str):
+def get_dossier_by_company(company_key: str, current_user: dict = Depends(get_current_user)):
     """Retrieve a persisted dossier by company key (company number or name slug).
     
     Returns 404 if no dossier has been generated yet for this company.
@@ -852,7 +1227,7 @@ def get_dossier_by_company(company_key: str):
 
 
 @app.get("/api/dossier/list")
-def list_dossiers():
+def list_dossiers(current_user: dict = Depends(get_current_user)):
     """List all persisted dossiers from the database."""
     try:
         from secureflex_intel.db import db_available, get_engine, dossiers_table
@@ -894,7 +1269,7 @@ def list_dossiers():
 
 
 @app.get("/api/dossier/{company_id}")
-def get_saved_dossier_legacy(company_id: str):
+def get_saved_dossier_legacy(company_id: str, current_user: dict = Depends(get_current_user)):
     """Legacy: get dossier by pipeline lead company_id. Redirects to by-company lookup."""
     try:
         from secureflex_intel.db import db_available, query_table, pipeline_table
@@ -918,7 +1293,7 @@ def get_tenders(
     min_score: int = 0,
     region: Optional[str] = None,
     source: Optional[str] = None,
-):
+    current_user: dict = Depends(get_current_user)):
     """Get latest tender scan results with optional source filter."""
     # DB path
     try:
@@ -960,7 +1335,7 @@ def get_tenders(
 
 
 @app.get("/api/tenders/report")
-def get_tender_report():
+def get_tender_report(current_user: dict = Depends(get_current_user)):
     """Get the latest tender scan report as markdown."""
     tenders_dir = str(settings.tenders_dir)
     latest_md = get_latest_file(tenders_dir, "tender_scan_", ext=".md")
@@ -973,7 +1348,7 @@ def get_tender_report():
 
 
 @app.get("/api/tenders/geojson")
-def get_tenders_geojson():
+def get_tenders_geojson(current_user: dict = Depends(get_current_user)):
     """GeoJSON of tender locations for map display."""
     import random
     # DB path
@@ -1023,7 +1398,7 @@ def get_prospects(
     region: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
-):
+    current_user: dict = Depends(get_current_user)):
     """Get prospect companies from latest scan."""
     # DB path
     try:
@@ -1073,7 +1448,7 @@ def get_prospects(
 
 
 @app.get("/api/prospects/geojson")
-def get_prospects_geojson(limit: int = 200):
+def get_prospects_geojson(limit: int = 200, current_user: dict = Depends(get_current_user)):
     """GeoJSON of prospect locations for map display."""
     import random
     try:
@@ -1131,7 +1506,7 @@ def get_competitors(
     limit: int = 100,
     offset: int = 0,
     acs_only: bool = False,
-):
+    current_user: dict = Depends(get_current_user)):
     """Get competitor companies from latest scan. Use acs_only=true to filter ACS-verified only."""
     # DB path
     try:
@@ -1184,7 +1559,7 @@ def get_competitors(
 
 
 @app.get("/api/competitors/geojson")
-def get_competitors_geojson(limit: int = 200):
+def get_competitors_geojson(limit: int = 200, current_user: dict = Depends(get_current_user)):
     """GeoJSON of competitor locations for map display."""
     import random
     try:
@@ -1239,7 +1614,7 @@ def get_signals(
     signal_type: Optional[str] = None,
     priority: Optional[str] = None,
     limit: int = 100,
-):
+    current_user: dict = Depends(get_current_user)):
     """Get latest intent signals (news, crime, jobs)."""
     # DB path
     try:
@@ -1298,7 +1673,7 @@ def get_signals(
 
 
 @app.get("/api/signals/report")
-def get_signals_report():
+def get_signals_report(current_user: dict = Depends(get_current_user)):
     """Get the latest signals report as markdown."""
     signals_dir = str(settings.signals_dir)
     latest_md = get_latest_file(signals_dir, "intent_signals_", ext=".md")
@@ -1314,7 +1689,7 @@ def get_signals_report():
 # ── Entity Resolution & Signal Actions ──────────────────────────────────────
 
 @app.post("/api/resolve/signals")
-def trigger_batch_resolution(background_tasks: BackgroundTasks):
+def trigger_batch_resolution(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger batch entity resolution for all signals."""
     def run_resolution_with_dossier_check():
         from secureflex_intel.entity_resolver import EntityResolver
@@ -1350,7 +1725,7 @@ def trigger_batch_resolution(background_tasks: BackgroundTasks):
 
 
 @app.get("/api/signals/matched")
-def get_matched_signals(limit: int = 200):
+def get_matched_signals(limit: int = 200, current_user: dict = Depends(get_current_user)):
     """Return signals with matched company info joined from signal_matches."""
     try:
         from secureflex_intel.db import (
@@ -1414,7 +1789,7 @@ def get_matched_signals(limit: int = 200):
 
 
 @app.get("/api/signals/for-company/{company_number}")
-def get_signals_for_company(company_number: str, limit: int = 50):
+def get_signals_for_company(company_number: str, limit: int = 50, current_user: dict = Depends(get_current_user)):
     """Return all signals matched to a specific company."""
     try:
         from secureflex_intel.db import (
@@ -1476,7 +1851,7 @@ def get_signals_for_company(company_number: str, limit: int = 50):
 
 
 @app.post("/api/signals/{signal_id}/action")
-def record_signal_action(signal_id: int, payload: Dict[str, Any]):
+def record_signal_action(signal_id: int, payload: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """Record an action taken on a signal (dismiss, flag, etc.)."""
     action = payload.get("action", "")
     valid_actions = {"add_to_pipeline", "generate_dossier", "dismiss", "flag"}
@@ -1507,7 +1882,7 @@ def record_signal_action(signal_id: int, payload: Dict[str, Any]):
 
 
 @app.post("/api/signals/{signal_id}/add-to-pipeline")
-def add_signal_to_pipeline(signal_id: int):
+def add_signal_to_pipeline(signal_id: int, current_user: dict = Depends(get_current_user)):
     """Create a pipeline lead from a signal's matched company."""
     try:
         from secureflex_intel.db import (
@@ -1604,7 +1979,7 @@ def add_signal_to_pipeline(signal_id: int):
 
 
 @app.get("/api/signals/suggested-actions")
-def get_suggested_actions(limit: int = 5):
+def get_suggested_actions(limit: int = 5, current_user: dict = Depends(get_current_user)):
     """Return signals with score >= 80 that match a known company but aren't yet in pipeline."""
     try:
         from secureflex_intel.db import (
@@ -1693,7 +2068,7 @@ def get_all_map_data(
     include_tenders: bool = True,
     prospect_limit: int = 200,
     competitor_limit: int = 100,
-):
+    current_user: dict = Depends(get_current_user)):
     """Combined GeoJSON for the main map view."""
     features = []
     if include_tenders:
@@ -1720,7 +2095,7 @@ def get_all_map_data(
 # ── Live Feed Endpoint ───────────────────────────────────────────────────────
 
 @app.get("/api/feed")
-def get_live_feed(limit: int = 50):
+def get_live_feed(limit: int = 50, current_user: dict = Depends(get_current_user)):
     """Aggregated live feed of recent activity across all sources."""
     events = []
 
@@ -1812,7 +2187,7 @@ def get_live_feed(limit: int = 50):
 # ── Scan History Endpoint ────────────────────────────────────────────────────
 
 @app.get("/api/scan/history")
-def get_scan_history(limit: int = 20):
+def get_scan_history(limit: int = 20, current_user: dict = Depends(get_current_user)):
     """Get recent scan run history from the database."""
     try:
         from secureflex_intel.db import db_available, get_engine, scan_runs_table
@@ -1864,7 +2239,7 @@ def trigger_tender_scan(
     background_tasks: BackgroundTasks,
     days_back: int = 30,
     add_to_pipeline: bool = False,
-):
+    current_user: dict = Depends(get_current_user)):
     """Trigger a new tender scan in the background."""
     def run_scan():
         from secureflex_intel.sources.contracts_finder import main as tender_main
@@ -1882,7 +2257,7 @@ def trigger_tender_scan(
 
 
 @app.post("/api/scan/fts")
-def trigger_fts_scan(background_tasks: BackgroundTasks):
+def trigger_fts_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger a new Find a Tender Service scan in the background."""
     def run_scan():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -1904,7 +2279,7 @@ def trigger_prospect_scan(
     background_tasks: BackgroundTasks,
     region: str = "london",
     max_results: int = 200,
-):
+    current_user: dict = Depends(get_current_user)):
     """Trigger a new Companies House prospect scan."""
     def run_scan():
         from secureflex_intel.sources.companies_house import main as ch_main
@@ -1920,7 +2295,7 @@ def trigger_prospect_scan(
 
 
 @app.post("/api/scan/signals")
-def trigger_signal_scan(background_tasks: BackgroundTasks):
+def trigger_signal_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger a new intent signal scan."""
     def run_scan():
         from secureflex_intel.sources.signals import main as signal_main
@@ -1939,7 +2314,7 @@ def trigger_signal_scan(background_tasks: BackgroundTasks):
 def trigger_competitor_scan(
     background_tasks: BackgroundTasks,
     region: str = "london",
-):
+    current_user: dict = Depends(get_current_user)):
     """Trigger a new competitor scan."""
     def run_scan():
         from secureflex_intel.sources.companies_house import main as ch_main
@@ -1957,7 +2332,7 @@ def trigger_competitor_scan(
 # ── Scan Schedule Endpoints ──────────────────────────────────────────────────
 
 @app.get("/api/scan/schedule")
-def get_scan_schedule():
+def get_scan_schedule(current_user: dict = Depends(get_current_user)):
     """Get the current auto-scan schedule status."""
     return {
         "enabled": _scheduler_state["enabled"],
@@ -1969,7 +2344,7 @@ def get_scan_schedule():
 
 
 @app.post("/api/scan/schedule")
-def toggle_scan_schedule(payload: Dict[str, Any] = None):
+def toggle_scan_schedule(payload: Dict[str, Any] = None, current_user: dict = Depends(get_current_user)):
     """Toggle auto-scan on/off. Optionally set interval_hours."""
     if payload is None:
         payload = {}
@@ -2032,7 +2407,7 @@ def _type_to_color(company_type: str) -> str:
 # ── Crime Intelligence Endpoints ────────────────────────────────────────────
 
 @app.post("/api/scan/crime")
-def trigger_crime_scan(background_tasks: BackgroundTasks):
+def trigger_crime_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger a Police UK crime intelligence scan for all prospect locations."""
     def run_crime_scan():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2055,7 +2430,7 @@ def trigger_crime_scan(background_tasks: BackgroundTasks):
 def get_crime_near(
     lat: float = Query(..., description="Latitude"),
     lng: float = Query(..., description="Longitude"),
-):
+    current_user: dict = Depends(get_current_user)):
     """
     Return crime density for a given lat/lng location.
     Calls the Police UK API in real-time for the most recent month.
@@ -2078,7 +2453,7 @@ def get_crime_near(
 
 
 @app.get("/api/crime/density/{company_number}")
-def get_crime_density_for_prospect(company_number: str):
+def get_crime_density_for_prospect(company_number: str, current_user: dict = Depends(get_current_user)):
     """
     Return crime density score for a prospect company by its Companies House number.
     Looks up the prospect's registered address, geocodes it, and fetches crime data.
@@ -2128,7 +2503,7 @@ def get_crime_density_for_prospect(company_number: str):
 # ── Crime Heatmap Endpoint ──────────────────────────────────────────────────
 
 @app.get("/api/crime/heatmap")
-def get_crime_heatmap():
+def get_crime_heatmap(current_user: dict = Depends(get_current_user)):
     """Return crime data aggregated as heatmap points [{lat, lng, intensity}]."""
     try:
         from secureflex_intel.db import db_available, get_engine, crime_data_table
@@ -2159,7 +2534,7 @@ def get_crime_heatmap():
 # ── Tender Matching & Historical Endpoints ─────────────────────────────────
 
 @app.post("/api/tenders/match-prospects")
-def match_tenders_to_prospects(background_tasks: BackgroundTasks):
+def match_tenders_to_prospects(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """For each tender, check if buyer name matches any prospect/pipeline lead.
     Creates signals for matches and flags pipeline leads."""
     try:
@@ -2267,7 +2642,7 @@ def match_tenders_to_prospects(background_tasks: BackgroundTasks):
 
 
 @app.get("/api/tenders/historical")
-def get_tender_history(buyer: str = Query("", description="Buyer name to search")):
+def get_tender_history(buyer: str = Query("", description="Buyer name to search"), current_user: dict = Depends(get_current_user)):
     """Return all tenders from a specific buyer, grouped by year/quarter."""
     if not buyer.strip():
         return {"buyer": buyer, "total": 0, "tenders": [], "by_period": {}}
@@ -2313,7 +2688,7 @@ def get_tender_history(buyer: str = Query("", description="Buyer name to search"
 
 
 @app.get("/api/tenders/trends")
-def get_tender_trends():
+def get_tender_trends(current_user: dict = Depends(get_current_user)):
     """Aggregate tender data for time-series charts: tenders per week, avg value per week, by source."""
     try:
         from secureflex_intel.db import db_available, get_engine, tenders_table
@@ -2375,7 +2750,7 @@ def get_tender_trends():
 # ── Pipeline CSV Export ────────────────────────────────────────────────────
 
 @app.get("/api/pipeline/export/csv")
-def export_pipeline_csv():
+def export_pipeline_csv(current_user: dict = Depends(get_current_user)):
     """Download pipeline data as CSV."""
     import io
     try:
@@ -2421,7 +2796,7 @@ def export_pipeline_csv():
 # ── Dossier PDF/HTML Export ────────────────────────────────────────────────
 
 @app.get("/api/dossier/{dossier_id}/export/pdf")
-def export_dossier_pdf(dossier_id: int):
+def export_dossier_pdf(dossier_id: int, current_user: dict = Depends(get_current_user)):
     """Download dossier as PDF (or HTML fallback)."""
     try:
         from secureflex_intel.db import db_available, get_engine, dossiers_table
@@ -2513,7 +2888,7 @@ def export_dossier_pdf(dossier_id: int):
 # ── Dossier Export by Company Key ──────────────────────────────────────────
 
 @app.get("/api/dossier/export/by-company/{company_key}")
-def export_dossier_by_company_key(company_key: str):
+def export_dossier_by_company_key(company_key: str, current_user: dict = Depends(get_current_user)):
     """Download dossier as PDF/HTML by company key (used when dossier ID is not known)."""
     try:
         from secureflex_intel.db import db_available, get_engine, dossiers_table
@@ -2606,7 +2981,7 @@ def _check_signal_count_dossier_trigger(company_number: str, company_name: str,
 def trigger_acs_scan(
     background_tasks: BackgroundTasks,
     cross_ref_ch: bool = True,
-):
+    current_user: dict = Depends(get_current_user)):
     """Trigger a full SIA ACS Register scan (scrape + optional CH cross-ref)."""
     def run_acs():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2628,7 +3003,7 @@ def trigger_acs_scan(
 async def import_acs_csv(
     background_tasks: BackgroundTasks,
     cross_ref_ch: bool = False,
-):
+    current_user: dict = Depends(get_current_user)):
     """Import ACS roster from uploaded CSV content (fallback)."""
     # Accept CSV as request body text
     from starlette.requests import Request as StarletteRequest
@@ -2640,7 +3015,7 @@ async def import_acs_csv(
 async def import_acs_csv_upload(
     background_tasks: BackgroundTasks,
     payload: Dict[str, Any],
-):
+    current_user: dict = Depends(get_current_user)):
     """Import ACS roster from CSV content in JSON body {csv_content: '...', cross_ref_ch: false}."""
     csv_content = payload.get("csv_content", "")
     cross_ref_ch = payload.get("cross_ref_ch", False)
@@ -2662,7 +3037,7 @@ async def import_acs_csv_upload(
 
 
 @app.get("/api/acs/stats")
-def get_acs_stats():
+def get_acs_stats(current_user: dict = Depends(get_current_user)):
     """Get ACS verification statistics for the competitors table."""
     try:
         from secureflex_intel.db import db_available, get_engine, competitors_table
@@ -2723,7 +3098,7 @@ def get_acs_stats():
 def trigger_gazette_scan(
     background_tasks: BackgroundTasks,
     days_back: int = 30,
-):
+    current_user: dict = Depends(get_current_user)):
     """Trigger a Gazette insolvency notice scan."""
     def run_gazette():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2745,7 +3120,7 @@ def trigger_gazette_scan(
 def get_gazette_notices(
     days_back: int = 30,
     limit: int = 50,
-):
+    current_user: dict = Depends(get_current_user)):
     """Get recent Gazette insolvency notices (live query, no DB required)."""
     try:
         from secureflex_intel.sources.gazette import GazetteClient
@@ -2763,7 +3138,7 @@ def get_gazette_notices(
 # -- Companies House Events --
 
 @app.post("/api/scan/ch-events")
-def trigger_ch_events_scan(background_tasks: BackgroundTasks):
+def trigger_ch_events_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger a Companies House events scan for all watched companies."""
     def run_ch_events():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2782,7 +3157,7 @@ def trigger_ch_events_scan(background_tasks: BackgroundTasks):
 
 
 @app.get("/api/ch-events/{company_number}")
-def get_company_events(company_number: str):
+def get_company_events(company_number: str, current_user: dict = Depends(get_current_user)):
     """Get recent events for a specific company from Companies House."""
     try:
         from secureflex_intel.sources.ch_streaming import CHEventsClient, events_to_signals
@@ -2806,7 +3181,7 @@ def get_company_events(company_number: str):
 # -- Planning Applications --
 
 @app.post("/api/scan/planning")
-def trigger_planning_scan(background_tasks: BackgroundTasks, days_back: int = 30):
+def trigger_planning_scan(background_tasks: BackgroundTasks, days_back: int = 30, current_user: dict = Depends(get_current_user)):
     """Trigger a Planning Applications scan."""
     def run_planning():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2827,7 +3202,7 @@ def trigger_planning_scan(background_tasks: BackgroundTasks, days_back: int = 30
 # -- CCS Frameworks --
 
 @app.post("/api/scan/ccs")
-def trigger_ccs_scan(background_tasks: BackgroundTasks):
+def trigger_ccs_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger a CCS Frameworks scan."""
     def run_ccs():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2846,7 +3221,7 @@ def trigger_ccs_scan(background_tasks: BackgroundTasks):
 
 
 @app.get("/api/frameworks")
-def get_frameworks():
+def get_frameworks(current_user: dict = Depends(get_current_user)):
     """Get list of tracked CCS frameworks."""
     try:
         from secureflex_intel.sources.ccs_frameworks import CCSClient
@@ -2860,7 +3235,7 @@ def get_frameworks():
 # -- HSE & Insolvency --
 
 @app.post("/api/scan/hse")
-def trigger_hse_scan(background_tasks: BackgroundTasks):
+def trigger_hse_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger an HSE Enforcement scan."""
     def run_hse():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2879,7 +3254,7 @@ def trigger_hse_scan(background_tasks: BackgroundTasks):
 
 
 @app.post("/api/scan/insolvency")
-def trigger_insolvency_scan(background_tasks: BackgroundTasks):
+def trigger_insolvency_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger an Insolvency scan."""
     def run_insolvency():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2900,7 +3275,7 @@ def trigger_insolvency_scan(background_tasks: BackgroundTasks):
 # -- Martyn's Law --
 
 @app.post("/api/scan/martyns-law")
-def trigger_martyns_law_scan(background_tasks: BackgroundTasks):
+def trigger_martyns_law_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger a Martyn's Law scan."""
     def run_ml():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2918,7 +3293,7 @@ def trigger_martyns_law_scan(background_tasks: BackgroundTasks):
     return {"status": "scan_started", "type": "martyns_law"}
 
 @app.get("/api/protect-duty/prospects")
-def get_protect_duty_prospects(limit: int = 50):
+def get_protect_duty_prospects(limit: int = 50, current_user: dict = Depends(get_current_user)):
     """Get prospects with their Protect Duty scores."""
     try:
         from secureflex_intel.sources.martyns_law import get_scored_prospects
@@ -2931,7 +3306,7 @@ def get_protect_duty_prospects(limit: int = 50):
 # -- Digital Marketplace --
 
 @app.post("/api/scan/digital-marketplace")
-def trigger_digital_marketplace_scan(background_tasks: BackgroundTasks):
+def trigger_digital_marketplace_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger a Digital Marketplace scan."""
     def run_dm():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2952,7 +3327,7 @@ def trigger_digital_marketplace_scan(background_tasks: BackgroundTasks):
 # -- Charity Commission --
 
 @app.post("/api/scan/charities")
-def trigger_charities_scan(background_tasks: BackgroundTasks):
+def trigger_charities_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger a Charity Commission scan."""
     def run_charities():
         from secureflex_intel.db import record_scan_start, record_scan_complete
@@ -2978,7 +3353,7 @@ _BADGES_TTL = 300  # 5 minutes
 
 
 @app.get("/api/entities/enrichment-badges")
-def get_enrichment_badges():
+def get_enrichment_badges(current_user: dict = Depends(get_current_user)):
     """Return cross-pollination badge flags for all known company numbers.
 
     Response shape:

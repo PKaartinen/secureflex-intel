@@ -1,29 +1,69 @@
 // API client — all calls go to /api/* (same origin, proxied in dev)
+// Adds JWT Authorization header automatically and handles 401 redirects.
+
+import { getToken, clearToken } from '../auth'
 
 const BASE = '/api'
 
+function authHeaders(): Record<string, string> {
+  const token = getToken()
+  const headers: Record<string, string> = {}
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  return headers
+}
+
+function handle401(res: Response, path: string): Response {
+  if (res.status === 401) {
+    clearToken()
+    window.location.href = '/login'
+    throw new Error('Session expired')
+  }
+  return res
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`)
+  const res = handle401(
+    await fetch(`${BASE}${path}`, { headers: authHeaders() }),
+    path,
+  )
   if (!res.ok) throw new Error(`API error ${res.status}: ${path}`)
   return res.json()
 }
 
 async function post<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  })
+  const res = handle401(
+    await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: body ? JSON.stringify(body) : undefined,
+    }),
+    path,
+  )
   if (!res.ok) throw new Error(`API error ${res.status}: ${path}`)
   return res.json()
 }
 
 async function patch<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  })
+  const res = handle401(
+    await fetch(`${BASE}${path}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      body: body ? JSON.stringify(body) : undefined,
+    }),
+    path,
+  )
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`)
+  return res.json()
+}
+
+async function del<T>(path: string): Promise<T> {
+  const res = handle401(
+    await fetch(`${BASE}${path}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    }),
+    path,
+  )
   if (!res.ok) throw new Error(`API error ${res.status}: ${path}`)
   return res.json()
 }
@@ -102,7 +142,8 @@ export interface LeadUpdatePayload {
   contact_phone?: string
 }
 
-export interface ActivityEntry {
+export interface ActivityEntry
+ {
   timestamp: string
   action: string
   description: string
@@ -385,6 +426,25 @@ export interface BadgeFlags {
 // company_number -> BadgeFlags
 export type EnrichmentBadgesResponse = Record<string, BadgeFlags>
 
+// Auth types
+export interface AuthUser {
+  id?: number
+  username: string
+  email: string
+  role: string
+  is_active?: boolean
+  created_at?: string | null
+  last_login?: string | null
+}
+
+export interface DigestSettings {
+  enabled: boolean
+  day: string
+  hour: number
+  recipients: string[]
+  smtp_configured: boolean
+}
+
 // ── API Functions ─────────────────────────────────────────────────────────────
 
 export const api = {
@@ -405,12 +465,15 @@ export const api = {
   tenders: (params?: { min_score?: number; classification?: string; source?: string }) => {
     const q = new URLSearchParams()
     if (params?.min_score) q.set('min_score', String(params.min_score))
-    if (params?.classification) q.set('classification', params.classification)
+    if (params?.classification) q.
+set('classification', params.classification)
     if (params?.source) q.set('source', params.source)
     return get<TendersResponse>(`/tenders${q.toString() ? '?' + q : ''}`)
   },
 
-  tenderReport: () => get<{ content: string; file: string | null; last_modified: string | null }>('/tenders/report'),
+  tenderReport: () => get<{ 
+    content: string; file: string | null 
+  }>('/tenders/report'),
 
   tendersGeoJSON: () => get<GeoJSONCollection>('/tenders/geojson'),
 
@@ -482,9 +545,7 @@ export const api = {
 
   bulkDeleteLeads: (companyIds: string[]) =>
     post<{ status: string; count: number }>('/pipeline/bulk-delete', { company_ids: companyIds }),
-  deleteLead: (companyId: string) =>
-    fetch(`${BASE}/pipeline/${companyId}`, { method: 'DELETE' })
-      .then(r => { if (!r.ok) throw new Error(`API error ${r.status}`); return r.json() }),
+  deleteLead: (companyId: string) => del<{ status: string }>(`/pipeline/${companyId}`),
 
   // AI
   aiStatus: () => get<{ available: boolean }>('/ai/status'),
@@ -493,12 +554,10 @@ export const api = {
 
   // Dossier
   generateDossier: (payload: DossierPayload) => post<DossierResponse>('/dossier/generate', payload),
-  // Fetch persisted dossier by company number (or name slug prefixed with 'name_')
   getDossierByCompany: (companyKey: string) =>
     get<DossierResponse>(`/dossier/by-company/${encodeURIComponent(companyKey)}`)
       .catch(() => null as DossierResponse | null),
   listDossiers: () => get<DossierListResponse>('/dossier/list'),
-  // Legacy pipeline-lead-based lookup
   getSavedDossier: (companyId: string) =>
     get<DossierResponse>(`/dossier/${companyId}`).catch(() => null as DossierResponse | null),
 
@@ -531,19 +590,37 @@ export const api = {
   tenderHistorical: (buyer: string) => get<{ buyer: string; total: number; tenders: Array<Record<string, unknown>>; by_period: Record<string, Array<Record<string, unknown>>> }>(`/tenders/historical?buyer=${encodeURIComponent(buyer)}`),
   tenderTrends: () => get<{ trends: Array<{ week: string; count: number; total_value: number; avg_value: number; cf: number; fts: number; avg_score: number }> }>('/tenders/trends'),
 
-  // Pipeline CSV export
+  // Pipeline CSV export (add token as query param for auth)
   exportPipelineCSV: () => {
-    window.open(`${BASE}/pipeline/export/csv`, '_blank')
+    const token = getToken()
+    const url = token ? `${BASE}/pipeline/export/csv?token=${encodeURIComponent(token)}` : `${BASE}/pipeline/export/csv`
+    window.open(url, '_blank')
     return Promise.resolve()
   },
 
   // Dossier PDF/HTML export
   exportDossierPDF: (dossierId: number) => {
-    window.open(`${BASE}/dossier/${dossierId}/export/pdf`, '_blank')
+    const token = getToken()
+    const url = token ? `${BASE}/dossier/${dossierId}/export/pdf?token=${encodeURIComponent(token)}` : `${BASE}/dossier/${dossierId}/export/pdf`
+    window.open(url, '_blank')
     return Promise.resolve()
   },
   exportDossierByCompanyKey: (companyKey: string) => {
-    window.open(`${BASE}/dossier/export/by-company/${encodeURIComponent(companyKey)}`, '_blank')
+    const token = getToken()
+    const url = token ? `${BASE}/dossier/export/by-company/${encodeURIComponent(companyKey)}?token=${encodeURIComponent(token)}` : `${BASE}/dossier/export/by-company/${encodeURIComponent(companyKey)}`
+    window.open(url, '_blank')
     return Promise.resolve()
   },
+
+  // ── Auth & User Management ──────────────────────────────────────────────
+  authUsers: () => get<{ users: AuthUser[]; total: number }>('/auth/users'),
+  authRegister: (data: { username: string; password: string; email?: string; role?: string }) =>
+    post<{ status: string; username: string; role: string }>('/auth/register', data),
+  authChangePassword: (oldPassword: string, newPassword: string) =>
+    post<{ status: string }>('/auth/change-password', { old_password: oldPassword, new_password: newPassword }),
+
+  // ── Email Digest ────────────────────────────────────────────────────────
+  digestPreview: () => post<{ html: string }>('/digest/preview'),
+  digestSend: () => post<{ status: string; recipients?: string[]; error?: string }>('/digest/send'),
+  digestSettings: () => get<DigestSettings>('/digest/settings'),
 }

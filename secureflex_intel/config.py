@@ -115,6 +115,48 @@ class Settings:
     def prospector_max_results(self) -> int:
         return int(os.environ.get("PROSPECTOR_MAX_RESULTS", "200"))
 
+    # ── JWT Authentication ───────────────────────────────────────────────
+    @property
+    def jwt_secret_key(self) -> str:
+        return os.environ.get("JWT_SECRET_KEY", "secureflex-default-jwt-secret-change-me")
+
+    @property
+    def jwt_expiry_hours(self) -> int:
+        return int(os.environ.get("JWT_EXPIRY_HOURS", "24"))
+
+    # ── SMTP / Email Digest ──────────────────────────────────────────────
+    @property
+    def smtp_host(self) -> str:
+        return os.environ.get("SMTP_HOST", "")
+
+    @property
+    def smtp_port(self) -> int:
+        return int(os.environ.get("SMTP_PORT", "587"))
+
+    @property
+    def smtp_user(self) -> str:
+        return os.environ.get("SMTP_USER", "")
+
+    @property
+    def smtp_password(self) -> str:
+        return os.environ.get("SMTP_PASSWORD", "")
+
+    @property
+    def digest_recipients(self) -> str:
+        return os.environ.get("DIGEST_RECIPIENTS", "")
+
+    @property
+    def digest_enabled(self) -> bool:
+        return os.environ.get("DIGEST_ENABLED", "false").lower() in ("1", "true", "yes")
+
+    @property
+    def digest_day(self) -> str:
+        return os.environ.get("DIGEST_DAY", "monday")
+
+    @property
+    def digest_hour(self) -> int:
+        return int(os.environ.get("DIGEST_HOUR", "8"))
+
     # ── General ──────────────────────────────────────────────────────────
     @property
     def debug(self) -> bool:

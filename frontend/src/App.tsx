@@ -24,7 +24,19 @@ const queryClient = new QueryClient({
 })
 
 function ProtectedRoutes() {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: '#0d1117' }}>
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs" style={{ color: '#6b7280' }}>Verifying session...</p>
+        </div>
+      </div>
+    )
+  }
+
   if (!user) return <Navigate to="/login" replace />
   return (
     <DossierProvider>
@@ -55,7 +67,8 @@ function ProtectedRoutes() {
 }
 
 function LoginRoute() {
-  const { user } = useAuth()
+  const { user, loading } = useAuth()
+  if (loading) return null
   if (user) return <Navigate to="/" replace />
   return <Login />
 }

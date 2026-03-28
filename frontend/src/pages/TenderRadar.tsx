@@ -237,9 +237,7 @@ export default function TenderRadar() {
             <Card className="flex-shrink-0">
               <CardHeader>
                 <CardTitle>Tender Scan Report</CardTitle>
-                {report?.last_modified && (
-                  <span className="text-xs" style={{ color: '#6b7280' }}>{formatRelativeTime(report.last_modified)}</span>
-                )}
+
               </CardHeader>
               <CardContent>
                 {reportLoading ? (

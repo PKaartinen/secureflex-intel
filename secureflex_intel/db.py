@@ -203,6 +203,17 @@ signal_matches_table = Table("signal_matches", metadata,
     Index("ix_signal_matches_company_number", "company_number"),
 )
 
+users_table = Table("users", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("username", String(100), unique=True, nullable=False),
+    Column("email", String(200)),
+    Column("password_hash", String(200)),
+    Column("role", String(50), default="viewer"),
+    Column("is_active", Boolean, default=True),
+    Column("created_at", DateTime, default=datetime.utcnow),
+    Column("last_login", DateTime, nullable=True),
+)
+
 crime_data_table = Table("crime_data", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("lat", Float, nullable=False),
@@ -285,6 +296,38 @@ def init_db():
                 "ALTER TABLE pipeline_leads ADD COLUMN IF NOT EXISTS contact_phone TEXT"
             ))
         print("[DB] Migration: pipeline_leads activity + contact columns OK")
+
+        # ── Users table migration ────────────────────────────────────
+        with engine.begin() as conn:
+            conn.execute(text(
+                """CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username VARCHAR(100) UNIQUE NOT NULL,
+                    email VARCHAR(200),
+                    password_hash VARCHAR(200),
+                    role VARCHAR(50) DEFAULT 'viewer',
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    last_login TIMESTAMP
+                )"""
+            ))
+        print("[DB] Migration: users table OK")
+
+        # Seed initial admin user if no users exist
+        try:
+            from passlib.context import CryptContext
+            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            with engine.begin() as conn:
+                user_count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
+                if user_count == 0:
+                    hashed = pwd_context.hash("SecureFlex2025!")
+                    conn.execute(text(
+                        "INSERT INTO users (username, email, password_hash, role, is_active, created_at) "
+                        "VALUES (:u, :e, :h, :r, TRUE, NOW())"
+                    ), {"u": "Pietari", "e": "", "h": hashed, "r": "admin"})
+                    print("[DB] Seeded initial admin user: Pietari")
+        except Exception as e:
+            print(f"[DB] Could not seed admin user (non-fatal): {e}")
 
         # Migrate old pipeline statuses to new stages
         with engine.begin() as conn:

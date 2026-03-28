@@ -150,7 +150,7 @@ export default function Layout() {
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-xs font-medium truncate" style={{ color: '#f9fafb' }}>{user.displayName}</p>
-              <p className="text-xs truncate" style={{ color: '#4b5563' }}>Internal</p>
+              <p className="text-xs truncate" style={{ color: '#4b5563' }}>{user.role}</p>
             </div>
             <button
               onClick={logout}
