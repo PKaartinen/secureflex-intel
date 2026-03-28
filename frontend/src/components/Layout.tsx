@@ -4,18 +4,17 @@ import { api } from '../lib/api'
 import { useAuth } from '../auth'
 import {
   LayoutDashboard, Map, FileText, Kanban, Building2,
-  Eye, Rss, BookOpen, BarChart3, ScanLine, Settings,
+  Rss, BookOpen, BarChart3, ScanLine, Settings,
   Shield, Activity, ChevronRight, LogOut
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 
 const navItems = [
-  { path: '/', label: 'Command Center', icon: LayoutDashboard },
+  { path: '/', label: 'Mission Control', icon: LayoutDashboard },
+  { path: '/market', label: 'Market Intelligence', icon: Building2 },
   { path: '/map', label: 'Intelligence Map', icon: Map },
   { path: '/tenders', label: 'Tender Radar', icon: FileText },
   { path: '/pipeline', label: 'Pipeline Manager', icon: Kanban },
-  { path: '/prospects', label: 'Prospect Explorer', icon: Building2 },
-  { path: '/competitors', label: 'Competitor Watch', icon: Eye },
   { path: '/signals', label: 'Signal Feed', icon: Rss },
   { path: '/briefs', label: 'Sales Dossiers', icon: BookOpen },
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
