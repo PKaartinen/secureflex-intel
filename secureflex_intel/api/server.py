@@ -2116,6 +2116,100 @@ def get_company_events(company_number: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# -- Planning Applications --
+
+@app.post("/api/scan/planning")
+def trigger_planning_scan(background_tasks: BackgroundTasks, days_back: int = 30):
+    """Trigger a Planning Applications scan."""
+    def run_planning():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.planning import run_scan as planning_scan
+        run_id = record_scan_start("planning")
+        try:
+            result = planning_scan(days_back=days_back)
+            record_scan_complete(run_id, result.get("signals_written", 0))
+            print(f"[Planning] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Planning] Scan error: {e}")
+
+    background_tasks.add_task(run_planning)
+    return {"status": "scan_started", "type": "planning", "days_back": days_back}
+
+
+# -- CCS Frameworks --
+
+@app.post("/api/scan/ccs")
+def trigger_ccs_scan(background_tasks: BackgroundTasks):
+    """Trigger a CCS Frameworks scan."""
+    def run_ccs():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.ccs_frameworks import run_scan as ccs_scan
+        run_id = record_scan_start("ccs")
+        try:
+            result = ccs_scan()
+            record_scan_complete(run_id, result.get("signals_written", 0))
+            print(f"[CCS] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[CCS] Scan error: {e}")
+
+    background_tasks.add_task(run_ccs)
+    return {"status": "scan_started", "type": "ccs"}
+
+
+@app.get("/api/frameworks")
+def get_frameworks():
+    """Get list of tracked CCS frameworks."""
+    try:
+        from secureflex_intel.sources.ccs_frameworks import CCSClient
+        client = CCSClient()
+        frameworks = client.scrape_frameworks()
+        return {"frameworks": frameworks}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -- HSE & Insolvency --
+
+@app.post("/api/scan/hse")
+def trigger_hse_scan(background_tasks: BackgroundTasks):
+    """Trigger an HSE Enforcement scan."""
+    def run_hse():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.hse import run_hse_scan
+        run_id = record_scan_start("hse")
+        try:
+            result = run_hse_scan()
+            record_scan_complete(run_id, result.get("signals_written", 0))
+            print(f"[HSE] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[HSE] Scan error: {e}")
+
+    background_tasks.add_task(run_hse)
+    return {"status": "scan_started", "type": "hse"}
+
+
+@app.post("/api/scan/insolvency")
+def trigger_insolvency_scan(background_tasks: BackgroundTasks):
+    """Trigger an Insolvency scan."""
+    def run_insolvency():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.hse import run_insolvency_scan
+        run_id = record_scan_start("insolvency")
+        try:
+            result = run_insolvency_scan()
+            record_scan_complete(run_id, result.get("signals_written", 0))
+            print(f"[Insolvency] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Insolvency] Scan error: {e}")
+
+    background_tasks.add_task(run_insolvency)
+    return {"status": "scan_started", "type": "insolvency"}
+
+
 # ── Enrichment Badges Endpoint ──────────────────────────────────────────────
 
 # In-memory cache: (timestamp, data)
