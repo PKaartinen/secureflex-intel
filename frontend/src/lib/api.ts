@@ -163,7 +163,18 @@ export interface CompetitorsResponse {
   last_scan: string | null
 }
 
+export interface SignalMatch {
+  id: number
+  signal_id: number
+  company_number: string
+  company_name: string
+  match_score: number
+  match_type: string
+  created_at: string
+}
+
 export interface Signal {
+  id?: number
   type: string
   title: string
   source: string
@@ -175,6 +186,25 @@ export interface Signal {
   category: string
   company?: string
   description?: string
+  score?: number
+  matches?: SignalMatch[]
+  best_match?: SignalMatch | null
+}
+
+export interface SuggestedAction {
+  signal_id: number
+  signal_title: string
+  signal_source: string
+  signal_published: string
+  company_number: string
+  company_name: string
+  match_score: number
+  match_type: string
+}
+
+export interface SuggestedActionsResponse {
+  total: number
+  suggestions: SuggestedAction[]
 }
 
 export interface SignalsResponse {
@@ -447,4 +477,17 @@ export const api = {
   scanGazette: (daysBack = 30) => post<ScanResponse>(`/scan/gazette?days_back=${daysBack}`),
   scanAcs: () => post<ScanResponse>('/scan/acs'),
   scanChEvents: () => post<ScanResponse>('/scan/ch-events'),
+
+  // Entity Resolution & Signal Actions
+  resolveSignals: () => post<{ status: string }>('/resolve/signals'),
+  matchedSignals: (limit = 200) => get<SignalsResponse>(`/signals/matched?limit=${limit}`),
+  signalsForCompany: (companyNumber: string) =>
+    get<SignalsResponse>(`/signals/for-company/${encodeURIComponent(companyNumber)}`),
+  signalAction: (signalId: number, action: string) =>
+    post<{ status: string; signal_id: number; action: string }>(`/signals/${signalId}/action`, { action }),
+  addSignalToPipeline: (signalId: number) =>
+    post<{ status: string; company_id?: string; company_name?: string; company_number?: string }>(
+      `/signals/${signalId}/add-to-pipeline`
+    ),
+  suggestedActions: (limit = 5) => get<SuggestedActionsResponse>(`/signals/suggested-actions?limit=${limit}`),
 }

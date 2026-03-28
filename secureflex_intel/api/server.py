@@ -1117,6 +1117,359 @@ def get_signals_report():
     }
 
 
+
+
+# ── Entity Resolution & Signal Actions ──────────────────────────────────────
+
+@app.post("/api/resolve/signals")
+def trigger_batch_resolution(background_tasks: BackgroundTasks):
+    """Trigger batch entity resolution for all signals."""
+    def run_resolution():
+        from secureflex_intel.entity_resolver import EntityResolver
+        resolver = EntityResolver()
+        resolver.build_company_index()
+        result = resolver.batch_resolve_signals()
+        print(f"[EntityResolver] Batch result: {result}")
+
+    background_tasks.add_task(run_resolution)
+    return {"status": "resolution_started"}
+
+
+@app.get("/api/signals/matched")
+def get_matched_signals(limit: int = 200):
+    """Return signals with matched company info joined from signal_matches."""
+    try:
+        from secureflex_intel.db import (
+            db_available, get_engine,
+            signals_table, signal_matches_table,
+        )
+        from sqlalchemy import select, func, outerjoin
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            # Get all signals with their best match (highest score)
+            # First get all signals
+            sig_rows = conn.execute(
+                select(signals_table).order_by(signals_table.c.scanned_at.desc()).limit(limit)
+            ).fetchall()
+
+            # Get all matches grouped by signal_id
+            match_rows = conn.execute(
+                select(signal_matches_table).order_by(signal_matches_table.c.match_score.desc())
+            ).fetchall()
+
+            # Build match lookup: signal_id -> list of matches
+            match_lookup = {}
+            for m in match_rows:
+                md = dict(m._mapping)
+                sid = md["signal_id"]
+                for k, v in md.items():
+                    if isinstance(v, datetime):
+                        md[k] = v.isoformat()
+                match_lookup.setdefault(sid, []).append(md)
+
+            results = []
+            for row in sig_rows:
+                d = dict(row._mapping)
+                for k, v in d.items():
+                    if isinstance(v, datetime):
+                        d[k] = v.isoformat()
+                # Normalise field names for frontend
+                d["type"] = d.get("signal_type", "")
+                d["priority"] = d.get("signal_category", "")
+                d["category"] = d.get("signal_type", "")
+                d["relevance"] = d.get("description", "")
+                d["url"] = d.get("link", "")
+                # Attach matches
+                d["matches"] = match_lookup.get(d["id"], [])
+                d["best_match"] = d["matches"][0] if d["matches"] else None
+                results.append(d)
+
+            return {
+                "total": len(results),
+                "signals": results,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Signals] matched error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/signals/for-company/{company_number}")
+def get_signals_for_company(company_number: str, limit: int = 50):
+    """Return all signals matched to a specific company."""
+    try:
+        from secureflex_intel.db import (
+            db_available, get_engine,
+            signals_table, signal_matches_table,
+        )
+        from sqlalchemy import select
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            # Get match records for this company
+            match_rows = conn.execute(
+                select(signal_matches_table)
+                .where(signal_matches_table.c.company_number == company_number)
+                .order_by(signal_matches_table.c.match_score.desc())
+                .limit(limit)
+            ).fetchall()
+
+            signal_ids = [dict(r._mapping)["signal_id"] for r in match_rows]
+            match_by_signal = {
+                dict(r._mapping)["signal_id"]: dict(r._mapping) for r in match_rows
+            }
+
+            if not signal_ids:
+                return {"total": 0, "signals": [], "company_number": company_number}
+
+            # Fetch the actual signals
+            sig_rows = conn.execute(
+                select(signals_table).where(signals_table.c.id.in_(signal_ids))
+            ).fetchall()
+
+            results = []
+            for row in sig_rows:
+                d = dict(row._mapping)
+                for k, v in d.items():
+                    if isinstance(v, datetime):
+                        d[k] = v.isoformat()
+                d["type"] = d.get("signal_type", "")
+                d["priority"] = d.get("signal_category", "")
+                m = match_by_signal.get(d["id"], {})
+                for mk, mv in m.items():
+                    if isinstance(mv, datetime):
+                        m[mk] = mv.isoformat()
+                d["match"] = m
+                results.append(d)
+
+            return {
+                "total": len(results),
+                "signals": results,
+                "company_number": company_number,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/signals/{signal_id}/action")
+def record_signal_action(signal_id: int, payload: Dict[str, Any]):
+    """Record an action taken on a signal (dismiss, flag, etc.)."""
+    action = payload.get("action", "")
+    valid_actions = {"add_to_pipeline", "generate_dossier", "dismiss", "flag"}
+    if action not in valid_actions:
+        raise HTTPException(status_code=400, detail=f"Invalid action. Must be one of: {valid_actions}")
+
+    try:
+        from secureflex_intel.db import db_available, get_engine, signals_table
+        from sqlalchemy import update as sa_update, select
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            # Verify signal exists
+            row = conn.execute(
+                select(signals_table).where(signals_table.c.id == signal_id)
+            ).first()
+            if not row:
+                raise HTTPException(status_code=404, detail="Signal not found")
+
+        return {"status": "ok", "signal_id": signal_id, "action": action}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/signals/{signal_id}/add-to-pipeline")
+def add_signal_to_pipeline(signal_id: int):
+    """Create a pipeline lead from a signal's matched company."""
+    try:
+        from secureflex_intel.db import (
+            db_available, get_engine,
+            signals_table, signal_matches_table, pipeline_table,
+            prospects_table, competitors_table, count_table,
+        )
+        from sqlalchemy import select, insert as sa_insert
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        with engine.begin() as conn:
+            # Get signal
+            sig = conn.execute(
+                select(signals_table).where(signals_table.c.id == signal_id)
+            ).first()
+            if not sig:
+                raise HTTPException(status_code=404, detail="Signal not found")
+
+            # Get best match
+            match = conn.execute(
+                select(signal_matches_table)
+                .where(signal_matches_table.c.signal_id == signal_id)
+                .order_by(signal_matches_table.c.match_score.desc())
+                .limit(1)
+            ).first()
+            if not match:
+                raise HTTPException(status_code=400, detail="No company match found for this signal")
+
+            match_d = dict(match._mapping)
+            company_number = match_d["company_number"]
+            company_name = match_d["company_name"]
+
+            # Check if already in pipeline
+            existing = conn.execute(
+                select(pipeline_table).where(pipeline_table.c.company_number == company_number).limit(1)
+            ).first()
+            if existing:
+                return {
+                    "status": "already_exists",
+                    "company_id": dict(existing._mapping)["company_id"],
+                    "company_name": company_name,
+                }
+
+            # Look up company details from prospects or competitors
+            company_details = {}
+            for tbl in (prospects_table, competitors_table):
+                row = conn.execute(
+                    select(tbl).where(tbl.c.company_number == company_number).limit(1)
+                ).first()
+                if row:
+                    company_details = dict(row._mapping)
+                    break
+
+            # Create pipeline lead
+            total = conn.execute(
+                select(pipeline_table)
+            ).fetchall()
+            company_id = f"SEC-{len(total) + 1:04d}"
+
+            sig_d = dict(sig._mapping)
+            lead = {
+                "company_id": company_id,
+                "company_name": company_name,
+                "company_number": company_number,
+                "company_type": company_details.get("company_type", ""),
+                "sic_codes": company_details.get("sic_codes", ""),
+                "status": "prospect",
+                "tier": "3",
+                "region": company_details.get("region", ""),
+                "address": company_details.get("address", ""),
+                "website_url": company_details.get("website_url", ""),
+                "source": f"Signal: {(sig_d.get('title') or '')[:80]}",
+                "notes": f"Auto-added from signal #{signal_id} (match score: {match_d['match_score']}%)",
+                "next_action": "Review signal and make contact",
+                "next_action_date": "",
+                "last_modified": datetime.utcnow(),
+                "created_at": datetime.utcnow(),
+            }
+            conn.execute(sa_insert(pipeline_table).values(**lead))
+
+            return {
+                "status": "created",
+                "company_id": company_id,
+                "company_name": company_name,
+                "company_number": company_number,
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/signals/suggested-actions")
+def get_suggested_actions(limit: int = 5):
+    """Return signals with score >= 80 that match a known company but aren't yet in pipeline."""
+    try:
+        from secureflex_intel.db import (
+            db_available, get_engine,
+            signals_table, signal_matches_table, pipeline_table,
+        )
+        from sqlalchemy import select
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            # Get high-confidence matches
+            match_rows = conn.execute(
+                select(signal_matches_table)
+                .where(signal_matches_table.c.match_score >= 80)
+                .order_by(signal_matches_table.c.match_score.desc())
+            ).fetchall()
+
+            if not match_rows:
+                return {"total": 0, "suggestions": []}
+
+            # Get pipeline company numbers
+            pipeline_rows = conn.execute(
+                select(pipeline_table.c.company_number)
+            ).fetchall()
+            pipeline_nums = {(r[0] or "").strip().upper() for r in pipeline_rows}
+
+            # Filter out companies already in pipeline
+            suggestions = []
+            seen_signals = set()
+            for m in match_rows:
+                md = dict(m._mapping)
+                cn = (md["company_number"] or "").strip().upper()
+                sid = md["signal_id"]
+                if cn in pipeline_nums:
+                    continue
+                if sid in seen_signals:
+                    continue
+                seen_signals.add(sid)
+
+                # Get signal details
+                sig = conn.execute(
+                    select(signals_table).where(signals_table.c.id == sid)
+                ).first()
+                if not sig:
+                    continue
+
+                sd = dict(sig._mapping)
+                for k, v in sd.items():
+                    if isinstance(v, datetime):
+                        sd[k] = v.isoformat()
+                for k, v in md.items():
+                    if isinstance(v, datetime):
+                        md[k] = v.isoformat()
+
+                suggestions.append({
+                    "signal_id": sid,
+                    "signal_title": sd.get("title", ""),
+                    "signal_source": sd.get("source", ""),
+                    "signal_published": sd.get("published", ""),
+                    "company_number": md["company_number"],
+                    "company_name": md["company_name"],
+                    "match_score": md["match_score"],
+                    "match_type": md["match_type"],
+                })
+
+                if len(suggestions) >= limit:
+                    break
+
+            return {"total": len(suggestions), "suggestions": suggestions}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Signals] suggested-actions error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Map Data (Combined GeoJSON) ─────────────────────────────────────────────
 
 @app.get("/api/map/all")
@@ -1825,17 +2178,28 @@ def get_enrichment_badges():
                     "gazette_alert": False,
                 }
 
-            # ── has_signals: company name in signal title or company field ──
-            sig_rows = conn.execute(
-                select(signals_table.c.title, signals_table.c.company)
-            ).fetchall()
-            for r in sig_rows:
-                title_lower = (r[0] or "").lower()
-                company_lower = (r[1] or "").lower()
-                for num, name in known.items():
-                    nl = name.lower()
-                    if nl and (nl in title_lower or nl in company_lower):
+            # ── has_signals: use signal_matches table for accurate matching ──
+            try:
+                from secureflex_intel.db import signal_matches_table
+                sm_rows = conn.execute(
+                    select(signal_matches_table.c.company_number)
+                ).fetchall()
+                matched_nums = {(r[0] or "").strip().upper() for r in sm_rows}
+                for num in known:
+                    if num.upper() in matched_nums:
                         badges[num]["has_signals"] = True
+            except Exception:
+                # Fallback to old text-matching method
+                sig_rows = conn.execute(
+                    select(signals_table.c.title, signals_table.c.company)
+                ).fetchall()
+                for r in sig_rows:
+                    title_lower = (r[0] or "").lower()
+                    company_lower = (r[1] or "").lower()
+                    for num, name in known.items():
+                        nl = name.lower()
+                        if nl and (nl in title_lower or nl in company_lower):
+                            badges[num]["has_signals"] = True
 
             # ── has_tenders: company name matches tender buyer ──
             tender_rows = conn.execute(

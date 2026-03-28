@@ -186,6 +186,19 @@ dossiers_table = Table("dossiers", metadata,
     Column("updated_at", DateTime, default=datetime.utcnow),
 )
 
+signal_matches_table = Table("signal_matches", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("signal_id", Integer, nullable=False),
+    Column("company_number", String(20), nullable=False),
+    Column("company_name", Text),
+    Column("match_score", Integer, default=0),
+    Column("match_type", String(50)),  # exact, token, fuzzy, abbreviation
+    Column("created_at", DateTime, default=datetime.utcnow),
+    UniqueConstraint("signal_id", "company_number", name="uq_signal_company"),
+    Index("ix_signal_matches_signal_id", "signal_id"),
+    Index("ix_signal_matches_company_number", "company_number"),
+)
+
 crime_data_table = Table("crime_data", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("lat", Float, nullable=False),
@@ -230,6 +243,28 @@ def init_db():
                 "ALTER TABLE competitors ADD COLUMN IF NOT EXISTS acs_score INTEGER"
             ))
         print("[DB] Migration: competitors ACS columns OK")
+
+        # Add signal_matches table
+        with engine.begin() as conn:
+            conn.execute(text(
+                """CREATE TABLE IF NOT EXISTS signal_matches (
+                    id SERIAL PRIMARY KEY,
+                    signal_id INTEGER NOT NULL,
+                    company_number VARCHAR(20) NOT NULL,
+                    company_name TEXT,
+                    match_score INTEGER DEFAULT 0,
+                    match_type VARCHAR(50),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(signal_id, company_number)
+                )"""
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_signal_matches_signal_id ON signal_matches(signal_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_signal_matches_company_number ON signal_matches(company_number)"
+            ))
+        print("[DB] Migration: signal_matches table OK")
 
         return True
     except Exception as e:

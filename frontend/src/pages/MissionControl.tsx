@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import {
@@ -13,7 +13,7 @@ import {
 } from 'recharts'
 import {
   FileText, Rss, Kanban, ChevronDown, ChevronUp,
-  ExternalLink, BookOpen, Target, Database, Eye, Zap,
+  ExternalLink, BookOpen, Target, Database, Eye, Zap, PlusCircle, Link2,
 } from 'lucide-react'
 import MiniMap from '../components/MiniMap'
 
@@ -79,6 +79,17 @@ export default function MissionControl() {
   const { data: pipelineStats } = useQuery({ queryKey: ['pipeline-stats'], queryFn: api.pipelineStats, refetchInterval: 30_000 })
   const { data: mapData } = useQuery({ queryKey: ['map-mini'], queryFn: () => api.mapAll({ prospect_limit: 100, competitor_limit: 50 }), refetchInterval: 120_000 })
   const { data: scanHistory } = useQuery({ queryKey: ['scan-history'], queryFn: api.scanHistory, refetchInterval: 30_000 })
+  const { data: suggestedActions } = useQuery({ queryKey: ['suggested-actions'], queryFn: () => api.suggestedActions(5), refetchInterval: 60_000 })
+  const queryClient = useQueryClient()
+
+  const addToPipeline = useMutation({
+    mutationFn: (signalId: number) => api.addSignalToPipeline(signalId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['suggested-actions'] })
+      queryClient.invalidateQueries({ queryKey: ['pipeline'] })
+      queryClient.invalidateQueries({ queryKey: ['pipeline-stats'] })
+    },
+  })
 
   // Priority Actions
   const priorityActions = useMemo(() => {
@@ -178,6 +189,61 @@ export default function MissionControl() {
                   </div>
                   <span className="text-xs px-1.5 py-0.5 rounded flex-shrink-0" style={{ background: item.color + '20', color: item.color, border: '1px solid ' + item.color + '40' }}>{item.type}</span>
                 </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Section 1b - Suggested Actions (Entity Resolution) */}
+        {(suggestedActions?.suggestions || []).length > 0 && (
+          <div className="rounded-xl border overflow-hidden" style={{ background: 'linear-gradient(135deg, rgba(59,130,246,0.05), rgba(34,197,94,0.05))', borderColor: '#1f2937' }}>
+            <div className="px-4 py-2 border-b flex items-center gap-2" style={{ borderColor: '#1f2937' }}>
+              <Link2 size={12} style={{ color: '#3b82f6' }} />
+              <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#3b82f6' }}>Suggested Actions</span>
+              <span className="text-xs ml-auto" style={{ color: '#4b5563' }}>Signals matched to companies not yet in pipeline</span>
+            </div>
+            <div className="divide-y" style={{ borderColor: '#1f2937' }}>
+              {(suggestedActions?.suggestions || []).map((s, i) => (
+                <div key={i} className="flex items-center gap-3 px-4 py-3 hover:bg-white/5 transition-colors">
+                  <div className="flex-shrink-0">
+                    <div
+                      className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold"
+                      style={{
+                        background: s.match_score >= 90 ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)',
+                        color: s.match_score >= 90 ? '#22c55e' : '#3b82f6',
+                        border: `1px solid ${s.match_score >= 90 ? 'rgba(34,197,94,0.3)' : 'rgba(59,130,246,0.3)'}`,
+                      }}
+                    >
+                      {s.match_score}%
+                    </div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate" style={{ color: '#f9fafb' }}>{s.signal_title}</p>
+                    <p className="text-xs mt-0.5 truncate" style={{ color: '#6b7280' }}>
+                      Matched: <span style={{ color: '#3b82f6' }}>{s.company_name}</span>
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => addToPipeline.mutate(s.signal_id)}
+                    className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors flex-shrink-0"
+                    style={{ background: 'rgba(34,197,94,0.15)', color: '#22c55e', border: '1px solid rgba(34,197,94,0.3)' }}
+                    disabled={addToPipeline.isPending}
+                  >
+                    <PlusCircle size={11} />
+                    Add to Pipeline
+                  </button>
+                  <button
+                    onClick={() => {
+                      const key = s.company_number || ('name_' + s.company_name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '').slice(0, 80))
+                      openDossier(key, s.company_name, s.company_number)
+                    }}
+                    className="flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg hover:bg-white/10 transition-colors flex-shrink-0"
+                    style={{ color: '#6b7280' }}
+                    title="View Dossier"
+                  >
+                    <BookOpen size={11} />
+                  </button>
+                </div>
               ))}
             </div>
           </div>
