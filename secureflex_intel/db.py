@@ -315,12 +315,11 @@ def init_db():
 
         # Seed initial admin user if no users exist
         try:
-            from passlib.context import CryptContext
-            pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+            import bcrypt as _bcrypt
             with engine.begin() as conn:
                 user_count = conn.execute(text("SELECT COUNT(*) FROM users")).scalar()
                 if user_count == 0:
-                    hashed = pwd_context.hash("SecureFlex2025!")
+                    hashed = _bcrypt.hashpw("SecureFlex2025!".encode("utf-8"), _bcrypt.gensalt()).decode("utf-8")
                     conn.execute(text(
                         "INSERT INTO users (username, email, password_hash, role, is_active, created_at) "
                         "VALUES (:u, :e, :h, :r, TRUE, NOW())"

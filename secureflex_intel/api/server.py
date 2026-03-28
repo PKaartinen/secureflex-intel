@@ -34,16 +34,27 @@ except ImportError:
 
 try:
     from jose import jwt, JWTError
-    from passlib.context import CryptContext
+    import bcrypt as _bcrypt
     HAS_AUTH = True
 except ImportError:
     HAS_AUTH = False
 
 from secureflex_intel.config import settings
 
-# ── Auth Setup ──────────────────────────────────────────────────────────────
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto") if HAS_AUTH else None
+# ── Bcrypt helpers (replaces passlib which is unmaintained) ──────────────────
+
+def _hash_password(password: str) -> str:
+    """Hash a password using bcrypt."""
+    return _bcrypt.hashpw(password.encode("utf-8"), _bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(password: str, hashed: str) -> bool:
+    """Verify a password against a bcrypt hash."""
+    return _bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+
+
+# ── Auth Setup ──────────────────────────────────────────────────────────────
 security = HTTPBearer(auto_error=False)
 
 # Paths that do NOT require authentication
@@ -430,7 +441,7 @@ def auth_login(payload: Dict[str, Any]):
                 u = dict(row._mapping)
                 if not u.get("is_active", True):
                     raise HTTPException(status_code=401, detail="Account disabled")
-                if not pwd_context or not pwd_context.verify(password, u["password_hash"]):
+                if not HAS_AUTH or not _verify_password(password, u["password_hash"]):
                     raise HTTPException(status_code=401, detail="Invalid credentials")
 
             # Update last_login
@@ -493,7 +504,7 @@ def auth_register(payload: Dict[str, Any], current_user: dict = Depends(get_curr
                 if existing:
                     raise HTTPException(status_code=409, detail="Username already exists")
 
-            hashed = pwd_context.hash(password)
+            hashed = _hash_password(password)
             with engine.begin() as conn:
                 conn.execute(
                     sa_insert(users_table).values(
@@ -538,10 +549,10 @@ def auth_change_password(payload: Dict[str, Any], current_user: dict = Depends(g
                     raise HTTPException(status_code=404, detail="User not found")
                 u = dict(row._mapping)
 
-            if not pwd_context.verify(old_password, u["password_hash"]):
+            if not _verify_password(old_password, u["password_hash"]):
                 raise HTTPException(status_code=401, detail="Current password is incorrect")
 
-            hashed = pwd_context.hash(new_password)
+            hashed = _hash_password(new_password)
             with engine.begin() as conn:
                 conn.execute(
                     sa_update(users_table)

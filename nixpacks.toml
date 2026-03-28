@@ -1,2 +1,2 @@
 [phases.install]
-cmds = ["pip install fastapi uvicorn[standard] python-dotenv pyyaml"]
+cmds = ["pip install -r requirements.txt"]
