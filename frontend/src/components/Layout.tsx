@@ -3,23 +3,23 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../auth'
 import {
-  LayoutDashboard, Map, FileText, Kanban, Building2,
-  Rss, BookOpen, BarChart3, ScanLine, Settings,
+  LayoutDashboard, Map, FileText, Kanban,
+  Building2, Rss, Settings2,
   Shield, Activity, ChevronRight, LogOut
 } from 'lucide-react'
 import { cn } from '../lib/utils'
 
-const navItems = [
-  { path: '/', label: 'Mission Control', icon: LayoutDashboard },
-  { path: '/market', label: 'Market Intelligence', icon: Building2 },
-  { path: '/map', label: 'Intelligence Map', icon: Map },
-  { path: '/tenders', label: 'Tender Radar', icon: FileText },
-  { path: '/pipeline', label: 'Pipeline Manager', icon: Kanban },
-  { path: '/signals', label: 'Signal Feed', icon: Rss },
-  { path: '/briefs', label: 'Sales Dossiers', icon: BookOpen },
-  { path: '/analytics', label: 'Analytics', icon: BarChart3 },
-  { path: '/scans', label: 'Scan Control', icon: ScanLine },
-  { path: '/settings', label: 'Settings', icon: Settings },
+const primaryNavItems = [
+  { path: '/',        label: 'Mission Control',   icon: LayoutDashboard },
+  { path: '/map',     label: 'Intelligence Map',  icon: Map             },
+  { path: '/tenders', label: 'Opportunities',     icon: FileText        },
+  { path: '/market',  label: 'Market Intelligence', icon: Building2     },
+  { path: '/signals', label: 'Signal Radar',      icon: Rss             },
+  { path: '/pipeline',label: 'Pipeline',          icon: Kanban          },
+]
+
+const adminNavItems = [
+  { path: '/system',  label: 'System',            icon: Settings2       },
 ]
 
 export default function Layout() {
@@ -31,8 +31,6 @@ export default function Layout() {
     queryFn: api.status,
     refetchInterval: 60_000,
   })
-
-  const isMapPage = location.pathname === '/map'
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: '#0a0a0f' }}>
@@ -57,27 +55,9 @@ export default function Layout() {
           </div>
         </div>
 
-        {/* Status indicator */}
-        <div className="px-4 py-2 border-b" style={{ borderColor: '#1f2937' }}>
-          <div className="flex items-center gap-2">
-            <div
-              className="rounded-full pulse-dot"
-              style={{ width: 6, height: 6, background: status?.status === 'ok' ? '#22c55e' : '#ef4444' }}
-            />
-            <span className="text-xs" style={{ color: '#6b7280' }}>
-              {status?.status === 'ok' ? 'System Online' : 'Connecting...'}
-            </span>
-            {status && (
-              <span className="ml-auto text-xs font-mono" style={{ color: '#374151' }}>
-                {status.pipeline?.lead_count || 0} leads
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Navigation */}
+        {/* Navigation — primary items */}
         <nav className="flex-1 overflow-y-auto py-2">
-          {navItems.map(({ path, label, icon: Icon }) => (
+          {primaryNavItems.map(({ path, label, icon: Icon }) => (
             <NavLink
               key={path}
               to={path}
@@ -101,6 +81,34 @@ export default function Layout() {
               )}
             </NavLink>
           ))}
+
+          {/* Admin separator */}
+          <div className="mx-4 my-2 border-t" style={{ borderColor: '#1f2937' }} />
+
+          {/* Admin items — slightly dimmer */}
+          {adminNavItems.map(({ path, label, icon: Icon }) => (
+            <NavLink
+              key={path}
+              to={path}
+              className={({ isActive }) => cn(
+                'flex items-center gap-3 px-4 py-2 mx-2 rounded-lg text-xs transition-all group',
+                isActive ? 'text-white' : 'hover:text-gray-300'
+              )}
+              style={({ isActive }) => ({
+                background: isActive ? 'rgba(107,114,128,0.15)' : 'transparent',
+                color: isActive ? '#d1d5db' : '#6b7280',
+                border: isActive ? '1px solid rgba(107,114,128,0.25)' : '1px solid transparent',
+              })}
+            >
+              {({ isActive }) => (
+                <>
+                  <Icon size={14} style={{ color: isActive ? '#9ca3af' : '#4b5563', flexShrink: 0 }} />
+                  <span className="flex-1 truncate">{label}</span>
+                  {isActive && <ChevronRight size={11} style={{ color: '#9ca3af' }} />}
+                </>
+              )}
+            </NavLink>
+          ))}
         </nav>
 
         {/* Data counts */}
@@ -110,6 +118,24 @@ export default function Layout() {
             <span className="text-xs" style={{ color: '#374151' }}>
               {status ? `${status.data_counts.tenders} tenders · ${status.data_counts.signals} signals · ${status.data_counts.prospects} prospects` : 'Loading...'}
             </span>
+          </div>
+        </div>
+
+        {/* System Online status */}
+        <div className="px-4 py-2 border-t" style={{ borderColor: '#1f2937' }}>
+          <div className="flex items-center gap-2">
+            <div
+              className="rounded-full"
+              style={{ width: 6, height: 6, background: status?.status === 'ok' ? '#22c55e' : '#ef4444', flexShrink: 0 }}
+            />
+            <span className="text-xs" style={{ color: '#6b7280' }}>
+              {status?.status === 'ok' ? 'System Online' : 'Connecting...'}
+            </span>
+            {status && (
+              <span className="ml-auto text-xs font-mono" style={{ color: '#374151' }}>
+                {status.pipeline?.lead_count || 0} leads
+              </span>
+            )}
           </div>
         </div>
 

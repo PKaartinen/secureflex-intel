@@ -188,7 +188,7 @@ export default function MissionControl() {
           <KPICard label="Active Opportunities" value={tenders?.total || 0} color="#ef4444" icon={<FileText size={14} />} onClick={() => navigate('/tenders')} />
           <KPICard label="Hot Signals" value={hotSignals} color="#f59e0b" icon={<Rss size={14} />} onClick={() => navigate('/signals')} subtitle="priority = hot" />
           <KPICard label="Pipeline Leads" value={pipelineStats?.total || 0} color="#3b82f6" icon={<Kanban size={14} />} onClick={() => navigate('/pipeline')} />
-          <KPICard label="Data Freshness" value={dataFreshness} color="#22c55e" icon={<Database size={14} />} onClick={() => navigate('/scans')} isText />
+          <KPICard label="Data Freshness" value={dataFreshness} color="#22c55e" icon={<Database size={14} />} onClick={() => navigate('/system')} isText />
           <KPICard label="Competitors" value={status?.data_counts.competitors || 0} color="#a855f7" icon={<Eye size={14} />} onClick={() => navigate('/market')} />
           <KPICard label="Prospects" value={status?.data_counts.prospects || 0} color="#14b8a6" icon={<Target size={14} />} onClick={() => navigate('/market')} />
         </div>

@@ -316,6 +316,18 @@ export interface ScanHistoryResponse {
   total: number
 }
 
+export interface BadgeFlags {
+  has_signals: boolean
+  has_tenders: boolean
+  has_dossier: boolean
+  in_pipeline: boolean
+  high_crime: boolean
+  gazette_alert: boolean
+}
+
+// company_number -> BadgeFlags
+export type EnrichmentBadgesResponse = Record<string, BadgeFlags>
+
 // ── API Functions ─────────────────────────────────────────────────────────────
 
 export const api = {
@@ -427,4 +439,12 @@ export const api = {
   // Legacy pipeline-lead-based lookup
   getSavedDossier: (companyId: string) =>
     get<DossierResponse>(`/dossier/${companyId}`).catch(() => null as DossierResponse | null),
+
+  // Cross-pollination enrichment badges
+  enrichmentBadges: () => get<EnrichmentBadgesResponse>('/entities/enrichment-badges'),
+
+  // Additional scan triggers for System page
+  scanGazette: (daysBack = 30) => post<ScanResponse>(`/scan/gazette?days_back=${daysBack}`),
+  scanAcs: () => post<ScanResponse>('/scan/acs'),
+  scanChEvents: () => post<ScanResponse>('/scan/ch-events'),
 }

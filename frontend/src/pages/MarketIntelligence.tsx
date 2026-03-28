@@ -7,6 +7,7 @@ import { useDossier } from '../lib/dossier-context'
 import {
   Building2, Search, ExternalLink, Globe, MapPin, Hash, Calendar,
   Briefcase, Shield, BookOpen, PlusCircle, CheckCircle2, Eye, X,
+  AlertTriangle,
 } from 'lucide-react'
 
 // ---- Types ----
@@ -27,6 +28,15 @@ interface MergedCompany {
   sia_number?: string
   score?: number
   source?: string
+}
+
+interface BadgeFlags {
+  has_signals: boolean
+  has_tenders: boolean
+  has_dossier: boolean
+  in_pipeline: boolean
+  high_crime: boolean
+  gazette_alert: boolean
 }
 
 // ---- Constants ----
@@ -61,6 +71,16 @@ const SORT_OPTIONS = [
   { value: 'name_desc', label: 'Name Z\u2192A' },
   { value: 'date_desc', label: 'Newest first' },
   { value: 'date_asc', label: 'Oldest first' },
+]
+
+// Badge definitions: key, emoji, colour, tooltip
+const BADGE_DEFS: Array<{ key: keyof BadgeFlags; emoji: string; color: string; label: string }> = [
+  { key: 'has_signals',    emoji: '📡', color: '#3b82f6', label: 'Has signals'      },
+  { key: 'has_tenders',    emoji: '📋', color: '#22c55e', label: 'Has tenders'      },
+  { key: 'has_dossier',    emoji: '🗂️', color: '#a855f7', label: 'Has dossier'      },
+  { key: 'in_pipeline',    emoji: '💼', color: '#f59e0b', label: 'In pipeline'      },
+  { key: 'high_crime',     emoji: '🚨', color: '#ef4444', label: 'High crime area'  },
+  { key: 'gazette_alert',  emoji: '⚖️', color: '#b91c1c', label: 'Gazette alert'    },
 ]
 
 function makeCompanyKey(c: { company_number?: string; company_name: string }) {
@@ -120,6 +140,27 @@ function AddToPipeline({ company }: { company: MergedCompany }) {
   )
 }
 
+// ---- Badge row component ----
+
+function BadgeRow({ flags }: { flags: BadgeFlags | undefined }) {
+  if (!flags) return null
+  const active = BADGE_DEFS.filter(d => flags[d.key])
+  if (!active.length) return null
+  return (
+    <div className="flex items-center gap-1 flex-wrap">
+      {active.map(d => (
+        <span
+          key={d.key}
+          title={d.label}
+          style={{ fontSize: 14, lineHeight: 1, cursor: 'default' }}
+        >
+          {d.emoji}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 // ---- Main Component ----
 
 export default function MarketIntelligence() {
@@ -141,14 +182,13 @@ export default function MarketIntelligence() {
   const { data: pipelineData } = useQuery({
     queryKey: ['pipeline-ids'], queryFn: () => api.pipeline({ limit: 500 }), refetchInterval: 60_000,
   })
-  const { data: dossierList } = useQuery({
-    queryKey: ['dossier-list'], queryFn: api.listDossiers, refetchInterval: 120_000,
-  })
-  const { data: signalsData } = useQuery({
-    queryKey: ['signals-counts'], queryFn: () => api.signals({ limit: 500 }), refetchInterval: 120_000,
-  })
-  const { data: tendersData } = useQuery({
-    queryKey: ['tenders-counts'], queryFn: () => api.tenders(), refetchInterval: 120_000,
+
+  // Fetch enrichment badges — single call, cached 5 min server-side
+  const { data: badgesData } = useQuery({
+    queryKey: ['enrichment-badges'],
+    queryFn: () => api.enrichmentBadges(),
+    refetchInterval: 300_000,
+    staleTime: 300_000,
   })
 
   const isLoading = pLoading || cLoading
@@ -183,7 +223,7 @@ export default function MarketIntelligence() {
     return merged
   }, [prospectsData, competitorsData])
 
-  // Lookup sets
+  // Pipeline lookup (for tab filter only — badges come from API)
   const pipelineKeys = useMemo(() => {
     const s = new Set<string>()
     ;(pipelineData?.leads || []).forEach(l => {
@@ -191,26 +231,6 @@ export default function MarketIntelligence() {
       if (l.company_name) s.add(l.company_name.toLowerCase())
     }); return s
   }, [pipelineData])
-
-  const dossierKeys = useMemo(() => {
-    const s = new Set<string>()
-    ;(dossierList?.dossiers || []).forEach(d => {
-      if (d.company_key) s.add(d.company_key)
-      if (d.company_number) s.add(d.company_number)
-    }); return s
-  }, [dossierList])
-
-  const signalCompanies = useMemo(() => {
-    const m = new Map<string, number>()
-    ;(signalsData?.signals || []).forEach(s => { if (s.company) { const k = s.company.toLowerCase(); m.set(k, (m.get(k) || 0) + 1) } })
-    return m
-  }, [signalsData])
-
-  const tenderBuyers = useMemo(() => {
-    const m = new Map<string, number>()
-    ;(tendersData?.tenders || []).forEach(t => { if (t.buyer) { const k = t.buyer.toLowerCase(); m.set(k, (m.get(k) || 0) + 1) } })
-    return m
-  }, [tendersData])
 
   // Filtered + sorted
   const filtered = useMemo(() => {
@@ -260,17 +280,8 @@ export default function MarketIntelligence() {
     return c
   }, [allCompanies])
 
-  const hasIndicator = (c: MergedCompany, type: string) => {
-    const nl = c.company_name.toLowerCase()
-    switch (type) {
-      case 'signals': return signalCompanies.has(nl)
-      case 'tenders': return tenderBuyers.has(nl)
-      case 'dossier': return dossierKeys.has(c.company_number) || dossierKeys.has(makeCompanyKey(c))
-      case 'pipeline': return pipelineKeys.has(c.company_number) || pipelineKeys.has(nl)
-      case 'acs': return c.acs_verified === true
-      default: return false
-    }
-  }
+  const getBadges = (c: MergedCompany): BadgeFlags | undefined =>
+    badgesData ? badgesData[c.company_number] : undefined
 
   const typeColor = selected ? (TYPE_COLORS[selected.company_type || ''] || '#6b7280') : '#6b7280'
 
@@ -377,6 +388,7 @@ export default function MarketIntelligence() {
                   {filtered.slice(0, 200).map((c, i) => {
                     const isActive = c.status?.toLowerCase().trim() === 'active'
                     const entityColor = c.entity_type === 'competitor' ? '#ef4444' : '#22c55e'
+                    const flags = getBadges(c)
                     return (
                       <Tr key={c.company_number || i} onClick={() => setSelected(c)}
                         style={{ background: selected?.company_number === c.company_number && selected?.company_name === c.company_name ? 'rgba(59,130,246,0.08)' : undefined }}>
@@ -403,13 +415,11 @@ export default function MarketIntelligence() {
                         </Td>
                         <Td><span className="text-xs">{formatDate(c.date_of_creation)}</span></Td>
                         <Td>
-                          <div className="flex items-center gap-1">
-                            {hasIndicator(c, 'signals') && <span title="Has signals" className="text-xs opacity-70">{'\u{1F4E1}'}</span>}
-                            {hasIndicator(c, 'tenders') && <span title="Has tenders" className="text-xs opacity-70">{'\u{1F4CB}'}</span>}
-                            {hasIndicator(c, 'dossier') && <span title="Has dossier" className="text-xs opacity-70">{'\u{1F5C2}'}</span>}
-                            {hasIndicator(c, 'pipeline') && <span title="In pipeline" className="text-xs opacity-70">{'\u{1F4BC}'}</span>}
-                            {hasIndicator(c, 'acs') && <span title="ACS Verified" className="text-xs">{'\u2705'}</span>}
-                          </div>
+                          <BadgeRow flags={flags} />
+                          {/* ACS badge (local, not from API) */}
+                          {c.acs_verified && (
+                            <span title="ACS Verified" style={{ fontSize: 14 }}>{'\u2705'}</span>
+                          )}
                         </Td>
                       </Tr>
                     )
@@ -427,7 +437,7 @@ export default function MarketIntelligence() {
               <div className="flex items-start justify-between p-4 border-b" style={{ borderColor: '#1f2937' }}>
                 <div className="flex-1 min-w-0 mr-2">
                   <h3 className="text-sm font-bold" style={{ color: '#f9fafb' }}>{selected.company_name}</h3>
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="text-xs px-1.5 py-0.5 rounded"
                       style={{ background: typeColor + '20', color: typeColor, border: '1px solid ' + typeColor + '40' }}>
                       {selected.entity_type === 'competitor' ? 'Competitor' : 'Prospect'}
@@ -443,6 +453,36 @@ export default function MarketIntelligence() {
                   <X size={14} />
                 </button>
               </div>
+
+              {/* Gazette alert warning banner */}
+              {getBadges(selected)?.gazette_alert && (
+                <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg px-3 py-2.5"
+                  style={{ background: 'rgba(185,28,28,0.15)', border: '1px solid rgba(185,28,28,0.4)', color: '#fca5a5' }}>
+                  <AlertTriangle size={14} className="flex-shrink-0 mt-0.5" />
+                  <p className="text-xs font-medium">Gazette insolvency notice detected for this company.</p>
+                </div>
+              )}
+
+              {/* Prominent badge strip */}
+              {getBadges(selected) && (
+                <div className="px-4 pt-3">
+                  <p className="text-xs uppercase tracking-wider mb-2" style={{ color: '#6b7280' }}>Intelligence Flags</p>
+                  <div className="flex flex-wrap gap-2">
+                    {BADGE_DEFS.map(d => {
+                      const flags = getBadges(selected)!
+                      if (!flags[d.key]) return null
+                      return (
+                        <span key={d.key}
+                          className="flex items-center gap-1 text-xs px-2 py-1 rounded-full"
+                          style={{ background: d.color + '20', color: d.color, border: '1px solid ' + d.color + '40' }}>
+                          <span style={{ fontSize: 12 }}>{d.emoji}</span>
+                          {d.label}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="p-4 space-y-4">
                 {/* Details */}
@@ -537,6 +577,15 @@ export default function MarketIntelligence() {
                       style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
                       <BookOpen size={14} /> View Dossier
                     </button>
+
+                    {/* View Signals link if has_signals badge */}
+                    {getBadges(selected)?.has_signals && (
+                      <a href="/signals"
+                        className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full"
+                        style={{ background: 'rgba(59,130,246,0.1)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.2)' }}>
+                        <span style={{ fontSize: 13 }}>📡</span> View Signals
+                      </a>
+                    )}
 
                     {selected.company_number && (
                       <a href={`https://find-and-update.company-information.service.gov.uk/company/${selected.company_number}`}

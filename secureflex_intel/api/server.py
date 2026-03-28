@@ -1763,6 +1763,165 @@ def get_company_events(company_number: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Enrichment Badges Endpoint ──────────────────────────────────────────────
+
+# In-memory cache: (timestamp, data)
+_badges_cache: Dict[str, Any] = {"ts": 0, "data": {}}
+_BADGES_TTL = 300  # 5 minutes
+
+
+@app.get("/api/entities/enrichment-badges")
+def get_enrichment_badges():
+    """Return cross-pollination badge flags for all known company numbers.
+
+    Response shape:
+        { "12345678": { has_signals, has_tenders, has_dossier, in_pipeline,
+                        high_crime, gazette_alert }, ... }
+    Cached for 5 minutes.
+    """
+    now = time.time()
+    if now - _badges_cache["ts"] < _BADGES_TTL and _badges_cache["data"]:
+        return _badges_cache["data"]
+
+    badges: Dict[str, Dict[str, bool]] = {}
+
+    try:
+        from secureflex_intel.db import (
+            db_available, get_engine,
+            prospects_table, competitors_table, pipeline_table,
+            signals_table, tenders_table, dossiers_table,
+        )
+        from sqlalchemy import select, func
+
+        if not db_available():
+            return {}
+
+        engine = get_engine()
+        with engine.connect() as conn:
+
+            # ── Collect all known company numbers (prospects + competitors) ──
+            known: Dict[str, str] = {}  # company_number -> company_name
+            for tbl in (prospects_table, competitors_table):
+                rows = conn.execute(
+                    select(tbl.c.company_number, tbl.c.company_name)
+                ).fetchall()
+                for r in rows:
+                    num = (r[0] or "").strip()
+                    name = (r[1] or "").strip()
+                    if num:
+                        known[num] = name
+
+            if not known:
+                return {}
+
+            # Initialise badge dicts
+            for num in known:
+                badges[num] = {
+                    "has_signals": False,
+                    "has_tenders": False,
+                    "has_dossier": False,
+                    "in_pipeline": False,
+                    "high_crime": False,
+                    "gazette_alert": False,
+                }
+
+            # ── has_signals: company name in signal title or company field ──
+            sig_rows = conn.execute(
+                select(signals_table.c.title, signals_table.c.company)
+            ).fetchall()
+            for r in sig_rows:
+                title_lower = (r[0] or "").lower()
+                company_lower = (r[1] or "").lower()
+                for num, name in known.items():
+                    nl = name.lower()
+                    if nl and (nl in title_lower or nl in company_lower):
+                        badges[num]["has_signals"] = True
+
+            # ── has_tenders: company name matches tender buyer ──
+            tender_rows = conn.execute(
+                select(tenders_table.c.buyer)
+            ).fetchall()
+            tender_buyers_lower = {(r[0] or "").lower() for r in tender_rows}
+            for num, name in known.items():
+                nl = name.lower()
+                if nl and any(nl in b for b in tender_buyers_lower):
+                    badges[num]["has_tenders"] = True
+
+            # ── has_dossier: company in dossiers table ──
+            dossier_rows = conn.execute(
+                select(dossiers_table.c.company_number, dossiers_table.c.company_name)
+            ).fetchall()
+            dossier_nums = {(r[0] or "").strip().upper() for r in dossier_rows}
+            dossier_names_lower = {(r[1] or "").lower() for r in dossier_rows}
+            for num, name in known.items():
+                if num.upper() in dossier_nums or name.lower() in dossier_names_lower:
+                    badges[num]["has_dossier"] = True
+
+            # ── in_pipeline: company_number in pipeline_leads ──
+            pipeline_rows = conn.execute(
+                select(pipeline_table.c.company_number)
+            ).fetchall()
+            pipeline_nums = {(r[0] or "").strip().upper() for r in pipeline_rows}
+            for num in known:
+                if num.upper() in pipeline_nums:
+                    badges[num]["in_pipeline"] = True
+
+            # ── gazette_alert: company in Gazette insolvency signal ──
+            gazette_rows = conn.execute(
+                select(signals_table.c.title, signals_table.c.company, signals_table.c.signal_type)
+                .where(func.lower(signals_table.c.signal_type).like("%gazette%"))
+            ).fetchall()
+            for r in gazette_rows:
+                title_lower = (r[0] or "").lower()
+                company_lower = (r[1] or "").lower()
+                for num, name in known.items():
+                    nl = name.lower()
+                    if nl and (nl in title_lower or nl in company_lower):
+                        badges[num]["gazette_alert"] = True
+
+            # ── high_crime: crime density > 50 (from crime_data table if available) ──
+            try:
+                from secureflex_intel.db import crime_data_table
+                # Aggregate density_score per location by summing crime counts
+                # crime_data stores raw crime records; we use count > 50 per company location
+                # We match via prospect address -> company_number
+                prospect_rows = conn.execute(
+                    select(prospects_table.c.company_number, prospects_table.c.address)
+                ).fetchall()
+                # Get total crime counts per lat/lng bucket from crime_data
+                crime_counts_rows = conn.execute(
+                    select(
+                        crime_data_table.c.location_name,
+                        func.sum(crime_data_table.c.count).label("total")
+                    ).group_by(crime_data_table.c.location_name)
+                ).fetchall()
+                crime_by_location: Dict[str, int] = {}
+                for cr in crime_counts_rows:
+                    loc = (cr[0] or "").lower()
+                    crime_by_location[loc] = int(cr[1] or 0)
+
+                for r in prospect_rows:
+                    num = (r[0] or "").strip()
+                    addr = (r[1] or "").lower()
+                    if not num or num not in badges:
+                        continue
+                    # Check if any crime location name appears in the address
+                    for loc, cnt in crime_by_location.items():
+                        if loc and loc in addr and cnt > 50:
+                            badges[num]["high_crime"] = True
+                            break
+            except Exception:
+                pass  # crime_data table may not exist — skip silently
+
+    except Exception as e:
+        print(f"[Badges] Error computing enrichment badges: {e}")
+        return {}
+
+    _badges_cache["ts"] = now
+    _badges_cache["data"] = badges
+    return badges
+
+
 ## ── Static SPA Serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 

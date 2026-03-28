@@ -11,10 +11,7 @@ import IntelligenceMap from './pages/IntelligenceMap'
 import TenderRadar from './pages/TenderRadar'
 import PipelineManager from './pages/PipelineManager'
 import SignalFeed from './pages/SignalFeed'
-import ResearchBriefs from './pages/ResearchBriefs'
-import Analytics from './pages/Analytics'
-import ScanControl from './pages/ScanControl'
-import Settings from './pages/Settings'
+import System from './pages/System'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -33,19 +30,22 @@ function ProtectedRoutes() {
     <DossierProvider>
       <Routes>
         <Route path="/" element={<Layout />}>
+          {/* Primary routes */}
           <Route index element={<MissionControl />} />
-          <Route path="market" element={<MarketIntelligence />} />
           <Route path="map" element={<IntelligenceMap />} />
           <Route path="tenders" element={<TenderRadar />} />
-          <Route path="pipeline" element={<PipelineManager />} />
+          <Route path="market" element={<MarketIntelligence />} />
           <Route path="signals" element={<SignalFeed />} />
-          <Route path="briefs" element={<ResearchBriefs />} />
-          <Route path="analytics" element={<Analytics />} />
-          <Route path="scans" element={<ScanControl />} />
-          <Route path="settings" element={<Settings />} />
-          {/* Redirects for removed routes */}
+          <Route path="pipeline" element={<PipelineManager />} />
+          {/* Admin */}
+          <Route path="system" element={<System />} />
+          {/* Redirects for removed/renamed routes */}
           <Route path="prospects" element={<Navigate to="/market" replace />} />
           <Route path="competitors" element={<Navigate to="/market" replace />} />
+          <Route path="analytics" element={<Navigate to="/" replace />} />
+          <Route path="briefs" element={<Navigate to="/" replace />} />
+          <Route path="scans" element={<Navigate to="/system" replace />} />
+          <Route path="settings" element={<Navigate to="/system" replace />} />
           <Route path="command" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
