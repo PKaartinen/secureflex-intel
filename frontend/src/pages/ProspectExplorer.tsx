@@ -5,6 +5,7 @@ import { Card, Button, PageHeader, LoadingSpinner, EmptyState, Table, Th, Td, Tr
 import { formatDate, formatRelativeTime } from '../lib/utils'
 import { Building2, Play, ExternalLink, Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, Globe, MapPin, Hash, Calendar, Briefcase, Shield, FileText, PlusCircle, Sparkles, CheckCircle2, BookOpen, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const COMPANY_TYPES = [
   'All',
@@ -776,9 +777,12 @@ function ProspectDossier({ prospect }: { prospect: Prospect }) {
     .prose a { color: #3b82f6; }
     .prose ul, .prose ol { padding-left: 1.2em; }
     .prose li { margin: 0.15em 0; }
-    .prose blockquote { border-left: 2px solid #374151; padding-left: 0.75em; color: #9ca3af; }
+     .prose blockquote { border-left: 2px solid #374151; padding-left: 0.75em; color: #9ca3af; }
+    .prose table { width: 100%; border-collapse: collapse; font-size: 0.7rem; }
+    .prose th { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid #374151; color: #9ca3af; font-weight: 600; }
+    .prose td { padding: 0.3rem 0.5rem; border-bottom: 1px solid #1f2937; color: #d1d5db; }
+    .prose tr:hover td { background: rgba(59,130,246,0.03); }
   `
-
   return (
     <div>
       <div className="flex items-center justify-between mb-1.5">
@@ -809,7 +813,7 @@ function ProspectDossier({ prospect }: { prospect: Prospect }) {
           <div className="rounded-lg p-3 max-h-96 overflow-y-auto" style={{ background: '#111827', border: '1px solid #1f2937' }}>
             <div className="prose prose-invert prose-xs max-w-none" style={{ color: '#d1d5db', fontSize: '0.7rem', lineHeight: '1.5' }}>
               <style>{DOSSIER_STYLES}</style>
-              <ReactMarkdown>{dossier}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{dossier}</ReactMarkdown>
             </div>
           </div>
           <button
@@ -874,7 +878,7 @@ function ProspectAIAnalysis({ prospect }: { prospect: Prospect }) {
       {analysis ? (
         <div className="rounded-lg p-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
           <div className="prose prose-invert prose-xs max-w-none" style={{ color: '#d1d5db', fontSize: '0.75rem', lineHeight: '1.4' }}>
-            <ReactMarkdown>{analysis}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{analysis}</ReactMarkdown>
           </div>
         </div>
       ) : (

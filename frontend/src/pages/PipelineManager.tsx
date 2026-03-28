@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSp
 import { formatDate, formatRelativeTime, parseScore } from '../lib/utils'
 import { Kanban, TableIcon, Clock, Search, Plus, X, Save, Trash2, Edit3, ChevronDown, BookOpen, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const PIPELINE_STAGES = ['Not Contacted', 'Email 1 Sent', 'Email 2 Sent', 'Warm / Meeting', 'Pilot Live', 'Won']
 const STAGE_COLORS: Record<string, string> = {
@@ -820,9 +821,12 @@ function LeadDossier({ lead }: { lead: Lead }) {
     .prose a { color: #3b82f6; }
     .prose ul, .prose ol { padding-left: 1.2em; }
     .prose li { margin: 0.15em 0; }
-    .prose blockquote { border-left: 2px solid #374151; padding-left: 0.75em; color: #9ca3af; }
+     .prose blockquote { border-left: 2px solid #374151; padding-left: 0.75em; color: #9ca3af; }
+    .prose table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .prose th { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #374151; color: #9ca3af; font-weight: 600; }
+    .prose td { padding: 0.4rem 0.6rem; border-bottom: 1px solid #1f2937; color: #d1d5db; }
+    .prose tr:hover td { background: rgba(59,130,246,0.03); }
   `
-
   return (
     <div className="border-t pt-4" style={{ borderColor: '#1f2937' }}>
       <div className="flex items-center justify-between mb-2">
@@ -853,7 +857,7 @@ function LeadDossier({ lead }: { lead: Lead }) {
           <div className="rounded-lg p-4 max-h-[500px] overflow-y-auto" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
             <div className="prose prose-invert prose-sm max-w-none" style={{ color: '#d1d5db', fontSize: '0.8rem', lineHeight: '1.5' }}>
               <style>{DOSSIER_STYLES}</style>
-              <ReactMarkdown>{dossier}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{dossier}</ReactMarkdown>
             </div>
           </div>
           <button

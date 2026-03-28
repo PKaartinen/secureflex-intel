@@ -5,6 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSp
 import { formatRelativeTime } from '../lib/utils'
 import { Rss, Play, ExternalLink, BookOpen, Filter } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const SIGNAL_TYPES = ['All', 'news', 'crime', 'tender_award', 'company_event']
 const PRIORITIES = ['All', 'hot', 'warm', 'low']
@@ -142,7 +143,7 @@ export default function SignalFeed() {
                 <LoadingSpinner />
               ) : report?.content ? (
                 <div className="prose prose-invert prose-sm max-w-none" style={{ color: '#d1d5db' }}>
-                  <ReactMarkdown>{report.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{report.content}</ReactMarkdown>
                 </div>
               ) : (
                 <EmptyState icon={<BookOpen size={24} />} title="No report available" description="Run a scan to generate a signals report" />

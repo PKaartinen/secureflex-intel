@@ -5,6 +5,7 @@ import { Button, PageHeader, LoadingSpinner, EmptyState } from '../components/ui
 import { formatDate, formatRelativeTime } from '../lib/utils'
 import { BookOpen, ChevronRight, X, Sparkles, Loader2, Search, Plus } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 export default function ResearchBriefs() {
   const [selectedDossier, setSelectedDossier] = useState<DossierListItem | null>(null)
@@ -258,7 +259,7 @@ function DossierViewer({
       <div className="rounded-xl border p-6" style={{ background: '#111827', borderColor: '#1f2937' }}>
         <div className="prose prose-sm max-w-none" style={{ color: '#d1d5db' }}>
           <style>{markdownStyles}</style>
-          <ReactMarkdown>{dossier.dossier_markdown}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{dossier.dossier_markdown}</ReactMarkdown>
         </div>
       </div>
     </div>
@@ -339,7 +340,7 @@ function GenerateDossierForm({
         <div className="rounded-xl border p-6" style={{ background: '#111827', borderColor: '#1f2937' }}>
           <div className="prose prose-sm max-w-none" style={{ color: '#d1d5db' }}>
             <style>{markdownStyles}</style>
-            <ReactMarkdown>{result.dossier_markdown}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{result.dossier_markdown}</ReactMarkdown>
           </div>
         </div>
       </div>
