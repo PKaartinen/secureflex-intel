@@ -17,6 +17,29 @@ const TYPE_ICONS: Record<string, string> = {
   company_event: '🏢',
 }
 
+/** Colour scheme for crime signal cards based on priority */
+function getCrimeCardStyle(priority: string): React.CSSProperties {
+  if (priority === 'hot') {
+    return { background: 'rgba(239,68,68,0.08)', borderColor: 'rgba(239,68,68,0.35)' }
+  }
+  if (priority === 'warm') {
+    return { background: 'rgba(245,158,11,0.08)', borderColor: 'rgba(245,158,11,0.35)' }
+  }
+  return { background: '#111827', borderColor: '#1f2937' }
+}
+
+/** Inline badge for HIGH CRIME AREA (score >= 80) */
+function HighCrimeBadge() {
+  return (
+    <span
+      className="text-xs font-bold px-2 py-0.5 rounded uppercase tracking-wide flex-shrink-0"
+      style={{ background: 'rgba(239,68,68,0.2)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.4)' }}
+    >
+      HIGH CRIME AREA
+    </span>
+  )
+}
+
 export default function SignalFeed() {
   const queryClient = useQueryClient()
   const [signalType, setSignalType] = useState('')
@@ -50,6 +73,7 @@ export default function SignalFeed() {
   const signals = data?.signals || []
   const hotCount = signals.filter(s => s.priority === 'hot').length
   const warmCount = signals.filter(s => s.priority === 'warm').length
+  const crimeCount = signals.filter(s => s.type === 'crime').length
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -85,16 +109,14 @@ export default function SignalFeed() {
             <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Warm</p>
             <p className="text-2xl font-bold" style={{ color: '#f59e0b' }}>{warmCount}</p>
           </div>
-          <div className="rounded-xl p-4 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
-            <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Crime Signals</p>
-            <p className="text-2xl font-bold" style={{ color: '#8b5cf6' }}>
-              {signals.filter(s => s.type === 'crime').length}
-            </p>
+          <div className="rounded-xl p-4 border" style={{ background: 'rgba(239,68,68,0.06)', borderColor: 'rgba(239,68,68,0.25)' }}>
+            <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#ef4444' }}>🚨 Crime Signals</p>
+            <p className="text-2xl font-bold" style={{ color: '#ef4444' }}>{crimeCount}</p>
           </div>
         </div>
 
         {/* Filters */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 flex-wrap">
           <div className="flex items-center gap-2">
             <Filter size={12} style={{ color: '#6b7280' }} />
             <span className="text-xs" style={{ color: '#6b7280' }}>Type:</span>
@@ -163,72 +185,128 @@ export default function SignalFeed() {
           />
         ) : (
           <div className="space-y-3">
-            {signals.map((signal, i) => (
-              <div
-                key={i}
-                className="rounded-xl border p-4 cursor-pointer hover:border-blue-500/30 transition-all"
-                style={{ background: '#111827', borderColor: '#1f2937' }}
-                onClick={() => setSelectedSignal(selectedSignal === signal ? null : signal)}
-              >
-                <div className="flex items-start gap-3">
-                  <span className="text-lg flex-shrink-0 mt-0.5">{TYPE_ICONS[signal.type] || '📡'}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>{signal.title}</p>
-                      <PriorityBadge priority={signal.priority} />
-                    </div>
-                    <p className="text-xs mb-2" style={{ color: '#6b7280' }}>
-                      {signal.source} · {formatRelativeTime(signal.published)}
-                    </p>
-                    {signal.description && (
-                      <p className="text-xs" style={{ color: '#9ca3af' }}>{signal.description}</p>
-                    )}
-                    {selectedSignal === signal && (
-                      <div className="mt-3 pt-3 border-t space-y-2" style={{ borderColor: '#1f2937' }}>
-                        <div className="grid grid-cols-3 gap-3">
-                          {[
-                            ['Type', signal.type],
-                            ['Category', signal.category],
-                            ['Relevance', signal.relevance],
-                            ['Company', signal.company],
-                          ].filter(([, v]) => v).map(([k, v]) => (
-                            <div key={String(k)}>
-                              <p className="text-xs" style={{ color: '#6b7280' }}>{k}</p>
-                              <p className="text-xs font-medium" style={{ color: '#f9fafb' }}>{v}</p>
-                            </div>
-                          ))}
-                        </div>
-                        {(signal.url || signal.link) && (
-                          <a
-                            href={signal.url || signal.link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 text-xs"
-                            style={{ color: '#3b82f6' }}
-                            onClick={e => e.stopPropagation()}
-                          >
-                            <ExternalLink size={11} />
-                            Read full article
-                          </a>
-                        )}
+            {signals.map((signal, i) => {
+              const isCrime = signal.type === 'crime'
+              const isHighCrime = isCrime && (signal as Signal & { score?: number }).score !== undefined
+                ? ((signal as Signal & { score?: number }).score ?? 0) >= 80
+                : isCrime && signal.priority === 'hot'
+              const cardStyle = isCrime
+                ? getCrimeCardStyle(signal.priority)
+                : { background: '#111827', borderColor: '#1f2937' }
+
+              return (
+                <div
+                  key={i}
+                  className="rounded-xl border p-4 cursor-pointer transition-all"
+                  style={{
+                    ...cardStyle,
+                    ...(selectedSignal === signal ? { borderColor: 'rgba(59,130,246,0.4)' } : {}),
+                  }}
+                  onClick={() => setSelectedSignal(selectedSignal === signal ? null : signal)}
+                >
+                  <div className="flex items-start gap-3">
+                    <span className="text-lg flex-shrink-0 mt-0.5">{TYPE_ICONS[signal.type] || '📡'}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1 flex-wrap">
+                        <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>{signal.title}</p>
+                        <PriorityBadge priority={signal.priority} />
+                        {isHighCrime && <HighCrimeBadge />}
                       </div>
-                    )}
-                  </div>
-                  <div className="flex-shrink-0">
-                    {(signal.url || signal.link) && (
-                      <a
-                        href={signal.url || signal.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={e => e.stopPropagation()}
-                      >
-                        <ExternalLink size={12} style={{ color: '#374151' }} />
-                      </a>
-                    )}
+                      <p className="text-xs mb-2" style={{ color: '#6b7280' }}>
+                        {signal.source} · {formatRelativeTime(signal.published)}
+                      </p>
+                      {signal.description && (
+                        <p className="text-xs" style={{ color: '#9ca3af' }}>{signal.description}</p>
+                      )}
+
+                      {/* Expanded detail */}
+                      {selectedSignal === signal && (
+                        <div className="mt-3 pt-3 border-t space-y-2" style={{ borderColor: '#1f2937' }}>
+                          <div className="grid grid-cols-3 gap-3">
+                            {[
+                              ['Type', signal.type],
+                              ['Category', signal.category],
+                              ['Priority', signal.priority],
+                              ['Company', signal.company],
+                              ['Relevance', signal.relevance],
+                            ].filter(([, v]) => v).map(([k, v]) => (
+                              <div key={String(k)}>
+                                <p className="text-xs" style={{ color: '#6b7280' }}>{k}</p>
+                                <p className="text-xs font-medium" style={{ color: '#f9fafb' }}>{v}</p>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Crime-specific detail rows */}
+                          {isCrime && signal.description && (() => {
+                            // Parse location, month, incident count from description
+                            const locMatch = signal.description.match(/Location: ([^.]+)\./)
+                            const monthMatch = signal.description.match(/Month: ([^.]+)\./)
+                            const topCatMatch = signal.description.match(/Top category: ([^(]+)\((\d+) incidents\)/)
+                            return (
+                              <div className="grid grid-cols-2 gap-3 mt-2 pt-2 border-t" style={{ borderColor: '#1f2937' }}>
+                                {locMatch && (
+                                  <div>
+                                    <p className="text-xs" style={{ color: '#6b7280' }}>Location</p>
+                                    <p className="text-xs font-medium" style={{ color: '#f9fafb' }}>{locMatch[1].trim()}</p>
+                                  </div>
+                                )}
+                                {monthMatch && (
+                                  <div>
+                                    <p className="text-xs" style={{ color: '#6b7280' }}>Month</p>
+                                    <p className="text-xs font-medium" style={{ color: '#f9fafb' }}>{monthMatch[1].trim()}</p>
+                                  </div>
+                                )}
+                                {topCatMatch && (
+                                  <div>
+                                    <p className="text-xs" style={{ color: '#6b7280' }}>Top Crime Category</p>
+                                    <p className="text-xs font-medium" style={{ color: '#f9fafb' }}>
+                                      {topCatMatch[1].trim()} ({topCatMatch[2]} incidents)
+                                    </p>
+                                  </div>
+                                )}
+                                <div>
+                                  <p className="text-xs" style={{ color: '#6b7280' }}>Incident Count</p>
+                                  <p className="text-xs font-medium" style={{ color: signal.priority === 'hot' ? '#ef4444' : signal.priority === 'warm' ? '#f59e0b' : '#f9fafb' }}>
+                                    {signal.title.match(/(\d+) incidents/)?.[1] || '—'} incidents
+                                  </p>
+                                </div>
+                              </div>
+                            )
+                          })()}
+
+                          {(signal.url || signal.link) && (
+                            <a
+                              href={signal.url || signal.link}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-1.5 text-xs"
+                              style={{ color: '#3b82f6' }}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <ExternalLink size={11} />
+                              Read full article
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-shrink-0">
+                      {(signal.url || signal.link) && (
+                        <a
+                          href={signal.url || signal.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <ExternalLink size={12} style={{ color: '#374151' }} />
+                        </a>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>

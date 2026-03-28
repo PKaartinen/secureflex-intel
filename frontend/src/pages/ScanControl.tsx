@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type ScanRun } from '../lib/api'
+import { AlertTriangle } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSpinner } from '../components/ui'
 import { formatRelativeTime } from '../lib/utils'
 import { Play, CheckCircle, XCircle, Clock, Zap, History, Loader2 } from 'lucide-react'
@@ -56,6 +57,15 @@ export default function ScanControl() {
       status: 'idle',
       color: '#8b5cf6',
       icon: '📡',
+    },
+    {
+      id: 'crime',
+      type: 'crime',
+      label: 'Crime Intelligence',
+      description: 'Fetch Police UK crime data for all prospect locations and generate crime risk signals',
+      status: 'idle',
+      color: '#ef4444',
+      icon: '🚨',
     },
   ])
 
@@ -126,6 +136,7 @@ export default function ScanControl() {
       else if (job.type === 'prospects') await api.scanProspects()
       else if (job.type === 'competitors') await api.scanCompetitors()
       else if (job.type === 'signals') await api.scanSignals()
+      else if (job.type === 'crime') await api.scanCrime()
 
       // Invalidate scan history to start polling for completion
       queryClient.invalidateQueries({ queryKey: ['scan-history'] })
@@ -252,10 +263,10 @@ export default function ScanControl() {
                 {scanHistory?.runs && scanHistory.runs.length > 0 ? (
                   scanHistory.runs.slice(0, 8).map((run) => {
                     const typeIcons: Record<string, string> = {
-                      tenders: '📋', prospects: '🏢', competitors: '👁️', signals: '📡',
+                      tenders: '📋', prospects: '🏢', competitors: '👁️', signals: '📡', crime: '🚨',
                     }
                     const typeColors: Record<string, string> = {
-                      tenders: '#f59e0b', prospects: '#3b82f6', competitors: '#ef4444', signals: '#8b5cf6',
+                      tenders: '#f59e0b', prospects: '#3b82f6', competitors: '#ef4444', signals: '#8b5cf6', crime: '#ef4444',
                     }
                     return (
                       <div key={run.id} className="flex items-center gap-3 py-1">

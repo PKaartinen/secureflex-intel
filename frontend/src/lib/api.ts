@@ -274,6 +274,18 @@ export interface DossierListResponse {
   dossiers: DossierListItem[]
 }
 
+export interface CrimeResponse {
+  total: number
+  categories: Record<string, number>
+  density_score: number
+  month?: string
+  security_relevant_total?: number
+  company_number?: string
+  company_name?: string
+  address?: string
+  error?: string
+}
+
 export interface ScanResponse {
   status: string
   type: string
@@ -376,6 +388,10 @@ export const api = {
   scanProspects: (region = 'london') => post<ScanResponse>(`/scan/prospects?region=${region}`),
   scanCompetitors: (region = 'london') => post<ScanResponse>(`/scan/competitors?region=${region}`),
   scanSignals: () => post<ScanResponse>('/scan/signals'),
+  scanCrime: () => post<ScanResponse>('/scan/crime'),
+
+  crimeNear: (lat: number, lng: number) => get<CrimeResponse>(`/crime/near?lat=${lat}&lng=${lng}`),
+  crimeDensity: (companyNumber: string) => get<CrimeResponse>(`/crime/density/${encodeURIComponent(companyNumber)}`),
 
   scanHistory: () => get<ScanHistoryResponse>('/scan/history'),
 

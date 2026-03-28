@@ -1,9 +1,9 @@
 import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api, type Prospect } from '../lib/api'
+import { api, type Prospect, type CrimeResponse } from '../lib/api'
 import { Card, Button, PageHeader, LoadingSpinner, EmptyState, Table, Th, Td, Tr, Input } from '../components/ui'
 import { formatDate, formatRelativeTime } from '../lib/utils'
-import { Building2, Play, ExternalLink, Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, Globe, MapPin, Hash, Calendar, Briefcase, Shield, FileText, PlusCircle, Sparkles, CheckCircle2, BookOpen, Loader2 } from 'lucide-react'
+import { Building2, Play, ExternalLink, Search, ChevronLeft, ChevronRight, SlidersHorizontal, X, Globe, MapPin, Hash, Calendar, Briefcase, Shield, FileText, PlusCircle, Sparkles, CheckCircle2, BookOpen, Loader2, AlertTriangle } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -323,10 +323,15 @@ export default function ProspectExplorer() {
                           style={isSelected ? { background: 'rgba(59,130,246,0.08)' } : {}}
                         >
                           <Td>
-                            <div>
-                              <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>{prospect.company_name}</p>
-                              {prospect.company_number && (
-                                <p className="text-xs font-mono" style={{ color: '#374151' }}>CH#{prospect.company_number}</p>
+                            <div className="flex items-center gap-1.5">
+                              <div>
+                                <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>{prospect.company_name}</p>
+                                {prospect.company_number && (
+                                  <p className="text-xs font-mono" style={{ color: '#374151' }}>CH#{prospect.company_number}</p>
+                                )}
+                              </div>
+                              {(prospect as Prospect & { high_crime?: boolean }).high_crime && (
+                                <span title="High crime area" style={{ color: '#ef4444' }}>🚨</span>
                               )}
                             </div>
                           </Td>
@@ -544,6 +549,9 @@ export default function ProspectExplorer() {
                   </div>
                 </div>
 
+                {/* Crime Context */}
+                <CrimeContext prospect={selectedProspect} />
+
                 {/* AI Analysis */}
                 <ProspectAIAnalysis prospect={selectedProspect} />
 
@@ -651,6 +659,113 @@ function getSecurityInsight(companyType?: string, status?: string): string {
     default:
       return 'Assess this company for potential security service requirements based on their sector and operational profile.'
   }
+}
+
+
+/** Crime Context section — fetches live crime density for the selected prospect's location */
+function CrimeContext({ prospect }: { prospect: Prospect }) {
+  const [crimeData, setCrimeData] = useState<CrimeResponse | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!prospect.company_number && !prospect.address) return
+    setLoading(true)
+    setError('')
+    setCrimeData(null)
+
+    const fetchCrime = async () => {
+      try {
+        // Try company-number based lookup first (uses registered address)
+        if (prospect.company_number) {
+          const data = await api.crimeDensity(prospect.company_number)
+          setCrimeData(data)
+        }
+      } catch {
+        setError('Crime data unavailable for this location')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchCrime()
+  }, [prospect.company_number, prospect.address])
+
+  const getDensityBadge = (score: number) => {
+    if (score > 50) return { emoji: '🔴', label: 'High', color: '#ef4444', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)' }
+    if (score >= 20) return { emoji: '🟡', label: 'Medium', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)' }
+    return { emoji: '🟢', label: 'Low', color: '#22c55e', bg: 'rgba(34,197,94,0.1)', border: 'rgba(34,197,94,0.3)' }
+  }
+
+  return (
+    <div>
+      <p className="text-xs uppercase tracking-wider mb-2" style={{ color: '#6b7280' }}>Crime Context</p>
+      <div className="rounded-lg p-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
+        {loading ? (
+          <div className="flex items-center gap-2">
+            <Loader2 size={12} className="animate-spin" style={{ color: '#6b7280' }} />
+            <span className="text-xs" style={{ color: '#6b7280' }}>Loading crime data...</span>
+          </div>
+        ) : error ? (
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={12} style={{ color: '#6b7280' }} />
+            <span className="text-xs" style={{ color: '#6b7280' }}>{error}</span>
+          </div>
+        ) : crimeData && !crimeData.error ? (
+          <div className="space-y-2">
+            {/* Density badge */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs" style={{ color: '#9ca3af' }}>Crime Density</span>
+              {(() => {
+                const badge = getDensityBadge(crimeData.density_score)
+                return (
+                  <span
+                    className="text-xs font-medium px-2 py-0.5 rounded"
+                    style={{ background: badge.bg, color: badge.color, border: `1px solid ${badge.border}` }}
+                  >
+                    {badge.emoji} {badge.label} ({crimeData.density_score}/100)
+                  </span>
+                )
+              })()}
+            </div>
+
+            {/* Total incidents */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs" style={{ color: '#9ca3af' }}>Total Incidents</span>
+              <span className="text-xs font-mono font-medium" style={{ color: '#f9fafb' }}>
+                {crimeData.total} {crimeData.month ? `(${crimeData.month})` : ''}
+              </span>
+            </div>
+
+            {/* Category breakdown */}
+            {crimeData.categories && Object.keys(crimeData.categories).length > 0 && (
+              <div className="pt-2 border-t" style={{ borderColor: '#1f2937' }}>
+                <p className="text-xs mb-1.5" style={{ color: '#6b7280' }}>By Category</p>
+                <div className="space-y-1">
+                  {Object.entries(crimeData.categories)
+                    .sort(([, a], [, b]) => b - a)
+                    .slice(0, 6)
+                    .map(([cat, count]) => (
+                      <div key={cat} className="flex items-center justify-between">
+                        <span className="text-xs capitalize" style={{ color: '#9ca3af' }}>
+                          {cat.replace(/-/g, ' ')}
+                        </span>
+                        <span className="text-xs font-mono" style={{ color: '#f9fafb' }}>{count}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={12} style={{ color: '#6b7280' }} />
+            <span className="text-xs" style={{ color: '#6b7280' }}>No crime data available — address not geocodable</span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 

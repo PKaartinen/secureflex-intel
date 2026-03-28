@@ -1440,6 +1440,102 @@ def _type_to_color(company_type: str) -> str:
     return "#6b7280"  # gray default
 
 
+# ── Crime Intelligence Endpoints ────────────────────────────────────────────
+
+@app.post("/api/scan/crime")
+def trigger_crime_scan(background_tasks: BackgroundTasks):
+    """Trigger a Police UK crime intelligence scan for all prospect locations."""
+    def run_crime_scan():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.police_uk import run_scan as police_scan
+        run_id = record_scan_start("crime")
+        try:
+            result = police_scan()
+            records = result.get("signals_written", 0) + result.get("crime_records_written", 0)
+            record_scan_complete(run_id, records)
+            print(f"[Crime] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Crime] Scan error: {e}")
+
+    background_tasks.add_task(run_crime_scan)
+    return {"status": "scan_started", "type": "crime"}
+
+
+@app.get("/api/crime/near")
+def get_crime_near(
+    lat: float = Query(..., description="Latitude"),
+    lng: float = Query(..., description="Longitude"),
+):
+    """
+    Return crime density for a given lat/lng location.
+    Calls the Police UK API in real-time for the most recent month.
+    """
+    try:
+        from secureflex_intel.sources.police_uk import PoliceUKClient
+        client = PoliceUKClient()
+        density = client.calculate_crime_density(lat, lng)
+        return density
+    except Exception as e:
+        print(f"[Crime] /crime/near error: {e}")
+        return {
+            "total": 0,
+            "categories": {},
+            "density_score": 0,
+            "month": "",
+            "security_relevant_total": 0,
+            "error": str(e),
+        }
+
+
+@app.get("/api/crime/density/{company_number}")
+def get_crime_density_for_prospect(company_number: str):
+    """
+    Return crime density score for a prospect company by its Companies House number.
+    Looks up the prospect's registered address, geocodes it, and fetches crime data.
+    """
+    try:
+        from secureflex_intel.db import db_available, query_table, prospects_table
+        from secureflex_intel.sources.police_uk import PoliceUKClient, address_to_coords
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        rows = query_table(prospects_table, filters={"company_number": company_number}, limit=1)
+        if not rows:
+            raise HTTPException(status_code=404, detail="Prospect not found")
+
+        prospect = rows[0]
+        address = prospect.get("address", "")
+        coords = address_to_coords(address)
+
+        if not coords:
+            return {
+                "company_number": company_number,
+                "company_name": prospect.get("company_name", ""),
+                "address": address,
+                "total": 0,
+                "categories": {},
+                "density_score": 0,
+                "month": "",
+                "error": "Could not geocode address",
+            }
+
+        lat, lng = coords
+        client = PoliceUKClient()
+        density = client.calculate_crime_density(lat, lng)
+        density["company_number"] = company_number
+        density["company_name"] = prospect.get("company_name", "")
+        density["address"] = address
+        return density
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Crime] /crime/density error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 ## ── Static SPA Serving ───────────────────────────────────────────────────────
 _STATIC_DIR = Path(__file__).parent.parent.parent / "static"
 

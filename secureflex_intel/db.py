@@ -181,6 +181,17 @@ dossiers_table = Table("dossiers", metadata,
     Column("updated_at", DateTime, default=datetime.utcnow),
 )
 
+crime_data_table = Table("crime_data", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("lat", Float, nullable=False),
+    Column("lng", Float, nullable=False),
+    Column("month", String(10)),
+    Column("category", String(100)),
+    Column("count", Integer, default=1),
+    Column("location_name", Text),
+    Column("scanned_at", DateTime, default=datetime.utcnow),
+)
+
 def init_db():
     """Create all tables if they don't exist, and run migrations."""
     engine = get_engine()
