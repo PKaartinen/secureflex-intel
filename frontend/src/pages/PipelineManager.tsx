@@ -5,7 +5,7 @@ import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSp
 import { formatDate, formatRelativeTime } from '../lib/utils'
 import { useDossier } from '../lib/dossier-context'
 import { DragDropContext, Droppable, Draggable, type DropResult } from '@hello-pangea/dnd'
-import { Kanban, TableIcon, Clock, Search, Plus, X, Save, Trash2, Edit3, CheckSquare, Square, ArrowRight, BarChart3, AlertTriangle, Activity, Radio, FileText, RefreshCw, BookOpen, Loader2 } from 'lucide-react'
+import { Kanban, TableIcon, Clock, Search, Plus, X, Save, Trash2, Edit3, CheckSquare, Square, ArrowRight, BarChart3, AlertTriangle, Activity, Radio, FileText, RefreshCw, BookOpen, Loader2, Download } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -488,6 +488,7 @@ export default function PipelineManager() {
                 <TableIcon size={12} /> Table
               </button>
             </div>
+            <Button size="sm" variant="ghost" onClick={() => api.exportPipelineCSV()}><Download size={12} /> Export CSV</Button>
             <Button size="sm" variant="primary" onClick={() => setShowAddModal(true)}><Plus size={12} /> Add Lead</Button>
           </div>
         }

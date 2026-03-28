@@ -522,4 +522,28 @@ export const api = {
       `/signals/${signalId}/add-to-pipeline`
     ),
   suggestedActions: (limit = 5) => get<SuggestedActionsResponse>(`/signals/suggested-actions?limit=${limit}`),
+
+  // Crime heatmap
+  crimeHeatmap: () => get<Array<{ lat: number; lng: number; intensity: number }>>('/crime/heatmap'),
+
+  // Tender matching & historical
+  matchTendersToProspects: () => post<{ matches_found: number; matches: Array<Record<string, unknown>> }>('/tenders/match-prospects'),
+  tenderHistorical: (buyer: string) => get<{ buyer: string; total: number; tenders: Array<Record<string, unknown>>; by_period: Record<string, Array<Record<string, unknown>>> }>(`/tenders/historical?buyer=${encodeURIComponent(buyer)}`),
+  tenderTrends: () => get<{ trends: Array<{ week: string; count: number; total_value: number; avg_value: number; cf: number; fts: number; avg_score: number }> }>('/tenders/trends'),
+
+  // Pipeline CSV export
+  exportPipelineCSV: () => {
+    window.open(`${BASE}/pipeline/export/csv`, '_blank')
+    return Promise.resolve()
+  },
+
+  // Dossier PDF/HTML export
+  exportDossierPDF: (dossierId: number) => {
+    window.open(`${BASE}/dossier/${dossierId}/export/pdf`, '_blank')
+    return Promise.resolve()
+  },
+  exportDossierByCompanyKey: (companyKey: string) => {
+    window.open(`${BASE}/dossier/export/by-company/${encodeURIComponent(companyKey)}`, '_blank')
+    return Promise.resolve()
+  },
 }

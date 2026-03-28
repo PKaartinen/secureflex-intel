@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { Button } from '../components/ui'
-import { Layers, RefreshCw } from 'lucide-react'
+import { Layers, RefreshCw, Flame } from 'lucide-react'
 import type * as L from 'leaflet'
 
 interface LayerToggle {
@@ -34,12 +34,15 @@ export default function IntelligenceMap() {
   const mapRef = useRef<HTMLDivElement>(null)
   const mapInstanceRef = useRef<L.Map | null>(null)
   const markersLayerRef = useRef<L.LayerGroup | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const heatLayerRef = useRef<any>(null)
 
   const [layers, setLayers] = useState<LayerToggle[]>([
     { id: 'prospect',   label: 'Prospects',   color: '#3b82f6', enabled: true },
     { id: 'competitor', label: 'Competitors', color: '#ef4444', enabled: true },
     { id: 'tender',     label: 'Tenders',     color: '#f59e0b', enabled: true },
   ])
+  const [heatmapEnabled, setHeatmapEnabled] = useState(false)
 
   const [selectedFeature, setSelectedFeature] = useState<Record<string, string | number | null> | null>(null)
   const [showLegend, setShowLegend] = useState(true)
@@ -48,6 +51,13 @@ export default function IntelligenceMap() {
     queryKey: ['map-all'],
     queryFn: () => api.mapAll({ prospect_limit: 300, competitor_limit: 200 }),
     refetchInterval: 120_000,
+  })
+
+  const { data: heatmapData } = useQuery({
+    queryKey: ['crime-heatmap'],
+    queryFn: api.crimeHeatmap,
+    enabled: heatmapEnabled,
+    refetchInterval: 300_000,
   })
 
   // Init map
@@ -149,6 +159,48 @@ export default function IntelligenceMap() {
     updateMarkers()
   }, [mapData, layers])
 
+  // Heatmap layer
+  useEffect(() => {
+    if (!mapInstanceRef.current) return
+
+    const updateHeatmap = async () => {
+      const leaflet = await import('leaflet')
+      const Lmod = leaflet.default ?? leaflet
+      // Import leaflet.heat side-effect
+      await import('leaflet.heat')
+
+      // Remove existing heatmap layer
+      if (heatLayerRef.current) {
+        mapInstanceRef.current!.removeLayer(heatLayerRef.current)
+        heatLayerRef.current = null
+      }
+
+      if (heatmapEnabled && heatmapData && heatmapData.length > 0) {
+        const points: [number, number, number][] = heatmapData.map(p => [
+          p.lat, p.lng, Math.min(p.intensity, 100)
+        ])
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const heat = (Lmod as any).heatLayer(points, {
+          radius: 20,
+          blur: 15,
+          maxZoom: 17,
+          max: 100,
+          gradient: {
+            0.2: '#22c55e',
+            0.4: '#f59e0b',
+            0.6: '#f97316',
+            0.8: '#ef4444',
+            1.0: '#dc2626',
+          },
+        })
+        heat.addTo(mapInstanceRef.current!)
+        heatLayerRef.current = heat
+      }
+    }
+
+    updateHeatmap()
+  }, [heatmapEnabled, heatmapData])
+
   const toggleLayer = (id: string) => {
     setLayers(prev => prev.map(l => l.id === id ? { ...l, enabled: !l.enabled } : l))
   }
@@ -167,7 +219,9 @@ export default function IntelligenceMap() {
       >
         <div>
           <h1 className="text-sm font-bold tracking-wide" style={{ color: '#f9fafb' }}>INTELLIGENCE MAP</h1>
-          <p className="text-xs" style={{ color: '#6b7280' }}>{enabledCount} features visible · London</p>
+          <p className="text-xs" style={{ color: '#6b7280' }}>
+            {enabledCount} features visible{heatmapEnabled ? ' · Crime heatmap ON' : ''} · London
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2">
@@ -190,6 +244,19 @@ export default function IntelligenceMap() {
                 {layer.label}
               </button>
             ))}
+            {/* Crime heatmap toggle */}
+            <button
+              onClick={() => setHeatmapEnabled(v => !v)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs transition-all"
+              style={{
+                background: heatmapEnabled ? 'rgba(239,68,68,0.2)' : 'rgba(255,255,255,0.05)',
+                border: `1px solid ${heatmapEnabled ? 'rgba(239,68,68,0.4)' : '#374151'}`,
+                color: heatmapEnabled ? '#ef4444' : '#6b7280',
+              }}
+            >
+              <Flame size={10} />
+              Crime Heat
+            </button>
           </div>
           <button
             onClick={() => setShowLegend(v => !v)}
@@ -280,7 +347,7 @@ export default function IntelligenceMap() {
                   href={String(selectedFeature.link)}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="block mt-2 text-xs text-center py-1.5 rounded"
+                  className="block mt-2 text-center py-1.5 rounded-lg text-xs font-medium"
                   style={{ background: 'rgba(59,130,246,0.2)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}
                 >
                   View Details →
@@ -314,6 +381,26 @@ export default function IntelligenceMap() {
                 <span className="text-xs" style={{ color: '#9ca3af' }}>Tender (large circle)</span>
               </div>
             </div>
+
+            {/* Crime heatmap legend */}
+            {heatmapEnabled && (
+              <>
+                <p className="text-xs font-semibold mb-1.5" style={{ color: '#4b5563' }}>CRIME HEATMAP</p>
+                <div className="mb-3">
+                  <div
+                    className="rounded"
+                    style={{
+                      height: 12,
+                      background: 'linear-gradient(to right, #22c55e, #f59e0b, #f97316, #ef4444, #dc2626)',
+                    }}
+                  />
+                  <div className="flex justify-between mt-1">
+                    <span className="text-xs" style={{ color: '#9ca3af', fontSize: '0.6rem' }}>Low</span>
+                    <span className="text-xs" style={{ color: '#9ca3af', fontSize: '0.6rem' }}>High</span>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Prospect colours by company type */}
             <p className="text-xs font-semibold mb-1.5" style={{ color: '#4b5563' }}>PROSPECT COLOURS</p>
@@ -353,6 +440,12 @@ export default function IntelligenceMap() {
                   <span className="font-mono" style={{ color: '#f9fafb' }}>{count}</span>
                 </div>
               ))}
+              {heatmapEnabled && heatmapData && (
+                <div className="flex justify-between gap-4 text-xs">
+                  <span style={{ color: '#ef4444' }}>crime heat</span>
+                  <span className="font-mono" style={{ color: '#f9fafb' }}>{heatmapData.length}</span>
+                </div>
+              )}
             </div>
           </div>
         )}

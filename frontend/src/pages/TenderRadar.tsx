@@ -5,9 +5,10 @@ import type { ScanSchedule } from '../lib/api'
 import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSpinner, EmptyState, ScoreBadge, PriorityBadge, Table, Th, Td, Tr } from '../components/ui'
 import { formatDate, formatCurrency, formatRelativeTime } from '../lib/utils'
 import { useDossier } from '../lib/dossier-context'
-import { FileText, Play, ExternalLink, BookOpen, PlusCircle, Sparkles, CheckCircle2, Loader2, Clock, RefreshCw } from 'lucide-react'
+import { FileText, Play, ExternalLink, BookOpen, PlusCircle, Sparkles, CheckCircle2, Loader2, Clock, RefreshCw, Target, TrendingUp, History } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { BarChart, Bar, LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from 'recharts'
 
 // ── Source badge component ──────────────────────────────────────────────────
 
@@ -56,6 +57,9 @@ export default function TenderRadar() {
     refetchInterval: 30_000,
   })
 
+  const [showTrends, setShowTrends] = useState(false)
+  const [buyerHistory, setBuyerHistory] = useState<string | null>(null)
+
   const scanCF = useMutation({
     mutationFn: () => api.scanTenders(30),
     onSuccess: () => {
@@ -68,6 +72,26 @@ export default function TenderRadar() {
     onSuccess: () => {
       setTimeout(() => queryClient.invalidateQueries({ queryKey: ['tenders'] }), 3000)
     },
+  })
+
+  const matchProspects = useMutation({
+    mutationFn: () => api.matchTendersToProspects(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tenders'] })
+      queryClient.invalidateQueries({ queryKey: ['signals'] })
+    },
+  })
+
+  const { data: trendData } = useQuery({
+    queryKey: ['tender-trends'],
+    queryFn: api.tenderTrends,
+    enabled: showTrends,
+  })
+
+  const { data: historyData, isLoading: historyLoading } = useQuery({
+    queryKey: ['tender-history', buyerHistory],
+    queryFn: () => api.tenderHistorical(buyerHistory || ''),
+    enabled: !!buyerHistory,
   })
 
   const toggleSchedule = useMutation({
@@ -99,6 +123,14 @@ export default function TenderRadar() {
             <Button size="sm" variant="ghost" loading={scanFTS.isPending} onClick={() => scanFTS.mutate()}>
               <Play size={12} />
               Scan FTS
+            </Button>
+            <Button size="sm" variant="ghost" loading={matchProspects.isPending} onClick={() => matchProspects.mutate()}>
+              <Target size={12} />
+              Match Prospects
+            </Button>
+            <Button size="sm" variant={showTrends ? 'primary' : 'ghost'} onClick={() => setShowTrends(v => !v)}>
+              <TrendingUp size={12} />
+              Trends
             </Button>
             <Button
               size="sm"
@@ -223,6 +255,117 @@ export default function TenderRadar() {
             </Card>
           )}
 
+          {/* Match results toast */}
+          {matchProspects.isSuccess && matchProspects.data && (
+            <div
+              className="flex items-center gap-3 px-4 py-2 rounded-lg text-xs"
+              style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.2)', color: '#3b82f6' }}
+            >
+              <Target size={12} />
+              <span>
+                Prospect matching complete: {(matchProspects.data as { matches_found: number }).matches_found} matches found.
+                Signals created for matched tenders.
+              </span>
+            </div>
+          )}
+
+          {/* Tender Trends */}
+          {showTrends && trendData?.trends && trendData.trends.length > 0 && (
+            <Card className="flex-shrink-0">
+              <CardHeader>
+                <CardTitle>Tender Trends (Last 12 Weeks)</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-xs mb-2" style={{ color: '#6b7280' }}>Tenders / Week</p>
+                    <ResponsiveContainer width="100%" height={120}>
+                      <BarChart data={trendData.trends}>
+                        <XAxis dataKey="week" tick={{ fontSize: 9, fill: '#6b7280' }} />
+                        <YAxis tick={{ fontSize: 9, fill: '#6b7280' }} width={20} />
+                        <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 6, fontSize: 11 }} />
+                        <Bar dataKey="count" fill="#ef4444" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div>
+                    <p className="text-xs mb-2" style={{ color: '#6b7280' }}>Avg Score / Week</p>
+                    <ResponsiveContainer width="100%" height={120}>
+                      <LineChart data={trendData.trends}>
+                        <XAxis dataKey="week" tick={{ fontSize: 9, fill: '#6b7280' }} />
+                        <YAxis tick={{ fontSize: 9, fill: '#6b7280' }} width={20} />
+                        <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 6, fontSize: 11 }} />
+                        <Line type="monotone" dataKey="avg_score" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div>
+                    <p className="text-xs mb-2" style={{ color: '#6b7280' }}>CF vs FTS / Week</p>
+                    <ResponsiveContainer width="100%" height={120}>
+                      <BarChart data={trendData.trends}>
+                        <XAxis dataKey="week" tick={{ fontSize: 9, fill: '#6b7280' }} />
+                        <YAxis tick={{ fontSize: 9, fill: '#6b7280' }} width={20} />
+                        <Tooltip contentStyle={{ background: '#1f2937', border: '1px solid #374151', borderRadius: 6, fontSize: 11 }} />
+                        <Bar dataKey="cf" fill="#3b82f6" radius={[3, 3, 0, 0]} />
+                        <Bar dataKey="fts" fill="#a855f7" radius={[3, 3, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Buyer History Panel */}
+          {buyerHistory && (
+            <Card className="flex-shrink-0">
+              <CardHeader>
+                <div className="flex items-center justify-between w-full">
+                  <CardTitle>
+                    <History size={14} className="inline mr-1" />
+                    Buyer History: {buyerHistory}
+                  </CardTitle>
+                  <button
+                    onClick={() => setBuyerHistory(null)}
+                    className="text-xs px-2 py-1 rounded"
+                    style={{ color: '#6b7280', background: 'rgba(255,255,255,0.05)' }}
+                  >
+                    Close
+                  </button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {historyLoading ? (
+                  <LoadingSpinner />
+                ) : historyData && historyData.total > 0 ? (
+                  <div className="space-y-3">
+                    <p className="text-xs" style={{ color: '#9ca3af' }}>
+                      {historyData.total} historical tenders from this buyer
+                    </p>
+                    {Object.entries(historyData.by_period || {}).map(([period, items]) => (
+                      <div key={period}>
+                        <p className="text-xs font-semibold mb-1" style={{ color: '#f59e0b' }}>{period}</p>
+                        <div className="space-y-1">
+                          {(items as Array<{ title: string; value: string; score: number }>).map((item, idx) => (
+                            <div key={idx} className="flex items-center justify-between text-xs px-2 py-1 rounded" style={{ background: '#1f2937' }}>
+                              <span className="truncate" style={{ color: '#d1d5db', maxWidth: 300 }}>{item.title}</span>
+                              <div className="flex items-center gap-3 flex-shrink-0">
+                                <span style={{ color: '#22c55e' }}>{item.value || 'N/A'}</span>
+                                <span style={{ color: '#f59e0b' }}>{item.score}/100</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs" style={{ color: '#6b7280' }}>No historical tenders found for this buyer.</p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Tender table */}
           <Card className="flex-1 overflow-hidden flex flex-col">
             <CardHeader className="flex-shrink-0">
@@ -280,6 +423,15 @@ export default function TenderRadar() {
                           <div>
                             <p className="text-sm">{tender.buyer}</p>
                             {tender.region && <p className="text-xs" style={{ color: '#6b7280' }}>{tender.region}</p>}
+                            {tender.buyer && (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setBuyerHistory(tender.buyer) }}
+                                className="text-xs mt-0.5 flex items-center gap-1"
+                                style={{ color: '#3b82f6' }}
+                              >
+                                <History size={10} /> History
+                              </button>
+                            )}
                           </div>
                         </Td>
                         <Td>

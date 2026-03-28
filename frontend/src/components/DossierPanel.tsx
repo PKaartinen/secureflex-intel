@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useDossier } from '../lib/dossier-context'
 import { api, type DossierResponse } from '../lib/api'
-import { X, BookOpen, Loader2, RefreshCw, Copy, CheckCircle2 } from 'lucide-react'
+import { X, BookOpen, Loader2, RefreshCw, Copy, CheckCircle2, Download } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -262,6 +262,23 @@ export default function DossierPanel() {
             }}
           >
             {copied ? <><CheckCircle2 size={12} /> Copied!</> : <><Copy size={12} /> Copy to Clipboard</>}
+          </button>
+          <button
+            onClick={() => {
+              if (target?.companyKey) {
+                api.exportDossierByCompanyKey(target.companyKey)
+              }
+            }}
+            disabled={!dossier?.dossier_markdown}
+            className="flex items-center gap-2 justify-center flex-1 py-2.5 rounded-lg text-xs font-medium transition-all"
+            style={{
+              background: 'rgba(59,130,246,0.1)',
+              color: '#3b82f6',
+              border: '1px solid rgba(59,130,246,0.2)',
+              opacity: dossier?.dossier_markdown ? 1 : 0.4,
+            }}
+          >
+            <Download size={12} /> Export PDF
           </button>
           <button
             onClick={closeDossier}

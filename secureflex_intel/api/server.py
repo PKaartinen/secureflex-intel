@@ -444,8 +444,8 @@ def get_pipeline_lead(company_id: str):
 
 
 @app.post("/api/pipeline")
-def create_pipeline_lead(payload: Dict[str, Any]):
-    """Create a new pipeline lead."""
+def create_pipeline_lead(payload: Dict[str, Any], background_tasks: BackgroundTasks):
+    """Create a new pipeline lead. Auto-triggers dossier generation."""
     company_name = payload.get("company_name", "").strip()
     if not company_name:
         raise HTTPException(status_code=400, detail="company_name is required")
@@ -477,6 +477,17 @@ def create_pipeline_lead(payload: Dict[str, Any]):
             }
             with engine.begin() as conn:
                 conn.execute(sa_insert(pipeline_table).values(**row))
+
+            # Auto-trigger dossier generation when lead enters pipeline
+            background_tasks.add_task(
+                _trigger_auto_dossier,
+                company_name,
+                payload.get("company_number", ""),
+                payload.get("company_type", ""),
+                payload.get("region", ""),
+                "pipeline_add",
+            )
+
             return {"status": "created", "company_id": company_id, "lead": row}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -1305,14 +1316,36 @@ def get_signals_report():
 @app.post("/api/resolve/signals")
 def trigger_batch_resolution(background_tasks: BackgroundTasks):
     """Trigger batch entity resolution for all signals."""
-    def run_resolution():
+    def run_resolution_with_dossier_check():
         from secureflex_intel.entity_resolver import EntityResolver
         resolver = EntityResolver()
         resolver.build_company_index()
         result = resolver.batch_resolve_signals()
         print(f"[EntityResolver] Batch result: {result}")
+        # After resolution, check for 3+ signal matches -> auto-dossier
+        try:
+            from secureflex_intel.db import db_available, get_engine, signal_matches_table
+            from sqlalchemy import select, func
+            if db_available():
+                engine = get_engine()
+                with engine.connect() as conn:
+                    # Find companies with 3+ signal matches
+                    groups = conn.execute(
+                        select(
+                            signal_matches_table.c.company_number,
+                            signal_matches_table.c.company_name,
+                            func.count().label("cnt"),
+                        ).group_by(
+                            signal_matches_table.c.company_number,
+                            signal_matches_table.c.company_name,
+                        ).having(func.count() >= 3)
+                    ).fetchall()
+                    for g in groups:
+                        _check_signal_count_dossier_trigger(g[0], g[1])
+        except Exception as e:
+            print(f"[EntityResolver] Dossier trigger check error: {e}")
 
-    background_tasks.add_task(run_resolution)
+    background_tasks.add_task(run_resolution_with_dossier_check)
     return {"status": "resolution_started"}
 
 
@@ -2090,6 +2123,479 @@ def get_crime_density_for_prospect(company_number: str):
     except Exception as e:
         print(f"[Crime] /crime/density error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Crime Heatmap Endpoint ──────────────────────────────────────────────────
+
+@app.get("/api/crime/heatmap")
+def get_crime_heatmap():
+    """Return crime data aggregated as heatmap points [{lat, lng, intensity}]."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, crime_data_table
+        from sqlalchemy import select, func
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+        engine = get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(
+                    crime_data_table.c.lat,
+                    crime_data_table.c.lng,
+                    func.sum(crime_data_table.c.count).label("intensity"),
+                ).group_by(crime_data_table.c.lat, crime_data_table.c.lng)
+            ).fetchall()
+            points = [
+                {"lat": float(r[0]), "lng": float(r[1]), "intensity": int(r[2] or 1)}
+                for r in rows if r[0] is not None and r[1] is not None
+            ]
+            return points
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Crime] /crime/heatmap error: {e}")
+        return []
+
+
+# ── Tender Matching & Historical Endpoints ─────────────────────────────────
+
+@app.post("/api/tenders/match-prospects")
+def match_tenders_to_prospects(background_tasks: BackgroundTasks):
+    """For each tender, check if buyer name matches any prospect/pipeline lead.
+    Creates signals for matches and flags pipeline leads."""
+    try:
+        from secureflex_intel.db import (
+            db_available, get_engine,
+            tenders_table, prospects_table, pipeline_table, signals_table,
+        )
+        from sqlalchemy import select, update as sa_update
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        matches_found = []
+
+        with engine.begin() as conn:
+            # Load all tenders
+            tender_rows = conn.execute(
+                select(tenders_table).order_by(tenders_table.c.score.desc())
+            ).fetchall()
+
+            # Load prospects
+            prospect_rows = conn.execute(
+                select(prospects_table.c.company_name, prospects_table.c.company_number, prospects_table.c.region)
+            ).fetchall()
+            prospect_lookup = {}
+            for p in prospect_rows:
+                name = (p[0] or "").strip().lower()
+                if name:
+                    prospect_lookup[name] = {"company_name": p[0], "company_number": p[1], "region": p[2]}
+
+            # Load pipeline leads
+            pipeline_rows = conn.execute(
+                select(pipeline_table.c.company_name, pipeline_table.c.company_id, pipeline_table.c.company_number)
+            ).fetchall()
+            pipeline_lookup = {}
+            for pl in pipeline_rows:
+                name = (pl[0] or "").strip().lower()
+                if name:
+                    pipeline_lookup[name] = {"company_name": pl[0], "company_id": pl[1], "company_number": pl[2]}
+
+            for tender in tender_rows:
+                td = dict(tender._mapping)
+                buyer = (td.get("buyer") or "").strip()
+                buyer_lower = buyer.lower()
+                if not buyer_lower:
+                    continue
+
+                matched_prospect = None
+                matched_pipeline = None
+
+                # Check prospects (substring match both ways)
+                for pname, pdata in prospect_lookup.items():
+                    if pname in buyer_lower or buyer_lower in pname:
+                        matched_prospect = pdata
+                        break
+
+                # Check pipeline
+                for plname, pldata in pipeline_lookup.items():
+                    if plname in buyer_lower or buyer_lower in plname:
+                        matched_pipeline = pldata
+                        break
+
+                if matched_prospect or matched_pipeline:
+                    company_name = (matched_prospect or matched_pipeline or {})["company_name"]
+                    match_info = {
+                        "tender_title": td.get("title", ""),
+                        "tender_score": td.get("score", 0),
+                        "buyer": buyer,
+                        "matched_company": company_name,
+                        "matched_type": "prospect" if matched_prospect else "pipeline",
+                        "company_number": (matched_prospect or matched_pipeline or {}).get("company_number", ""),
+                    }
+                    if matched_pipeline:
+                        match_info["pipeline_company_id"] = matched_pipeline.get("company_id", "")
+                    matches_found.append(match_info)
+
+                    # Create signal for the match
+                    signal_title = f"\U0001f3af TENDER MATCH: {td.get('title', '')[:80]} \u2014 buyer matches {'prospect' if matched_prospect else 'pipeline lead'} {company_name}"
+                    try:
+                        stmt = pg_insert(signals_table).values(
+                            link=f"tender-match-{td.get('id', '')}-{(matched_prospect or matched_pipeline or {}).get('company_number', '')}",
+                            title=signal_title[:500],
+                            company=company_name,
+                            source="tender_match",
+                            published=datetime.utcnow().isoformat(),
+                            description=f"Tender value: {td.get('value', 'N/A')} | Score: {td.get('score', 'N/A')} | Deadline: {td.get('deadline', 'N/A')}",
+                            score=int(td.get("score") or 0),
+                            signal_type="tender_match",
+                            signal_category="hot" if int(td.get("score") or 0) >= 60 else "warm",
+                            scanned_at=datetime.utcnow(),
+                        )
+                        stmt = stmt.on_conflict_do_nothing(index_elements=["link"])
+                        conn.execute(stmt)
+                    except Exception as e:
+                        print(f"[TenderMatch] Signal creation error: {e}")
+
+        return {"matches_found": len(matches_found), "matches": matches_found}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[TenderMatch] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tenders/historical")
+def get_tender_history(buyer: str = Query("", description="Buyer name to search")):
+    """Return all tenders from a specific buyer, grouped by year/quarter."""
+    if not buyer.strip():
+        return {"buyer": buyer, "total": 0, "tenders": [], "by_period": {}}
+    try:
+        from secureflex_intel.db import db_available, get_engine, tenders_table
+        from sqlalchemy import select, func
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+        engine = get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(tenders_table)
+                .where(func.lower(tenders_table.c.buyer).contains(buyer.lower().strip()))
+                .order_by(tenders_table.c.published_date.desc())
+            ).fetchall()
+            tenders_list = []
+            by_period = {}
+            for r in rows:
+                d = dict(r._mapping)
+                for k, v in d.items():
+                    if isinstance(v, datetime):
+                        d[k] = v.isoformat()
+                tenders_list.append(d)
+                # Group by year/quarter
+                pub = d.get("published_date", "")
+                try:
+                    dt = datetime.fromisoformat(pub.replace("Z", "+00:00")) if pub else None
+                except Exception:
+                    dt = None
+                if dt:
+                    q = (dt.month - 1) // 3 + 1
+                    period = f"{dt.year} Q{q}"
+                    by_period.setdefault(period, []).append({
+                        "title": d.get("title", ""),
+                        "value": d.get("value", ""),
+                        "score": d.get("score", 0),
+                    })
+            return {"buyer": buyer, "total": len(tenders_list), "tenders": tenders_list, "by_period": by_period}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tenders/trends")
+def get_tender_trends():
+    """Aggregate tender data for time-series charts: tenders per week, avg value per week, by source."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, tenders_table
+        from sqlalchemy import select
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+        engine = get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(tenders_table.c.published_date, tenders_table.c.value, tenders_table.c.source, tenders_table.c.score)
+                .order_by(tenders_table.c.published_date.asc())
+            ).fetchall()
+
+            # Group by week
+            weekly: Dict[str, Dict[str, Any]] = {}
+            for r in rows:
+                pub = r[0] or ""
+                try:
+                    dt = datetime.fromisoformat(str(pub).replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                # Get Monday of the week
+                start_of_week = dt - timedelta(days=dt.weekday())
+                week_key = start_of_week.strftime("%Y-%m-%d")
+                if week_key not in weekly:
+                    weekly[week_key] = {"week": week_key, "count": 0, "total_value": 0, "value_count": 0, "cf": 0, "fts": 0, "avg_score": 0, "score_sum": 0}
+                weekly[week_key]["count"] += 1
+                # Parse value
+                val_str = str(r[1] or "")
+                try:
+                    import re as _re
+                    nums = _re.findall(r'[\d,]+\.?\d*', val_str.replace(",", ""))
+                    if nums:
+                        weekly[week_key]["total_value"] += float(nums[0])
+                        weekly[week_key]["value_count"] += 1
+                except Exception:
+                    pass
+                source = r[2] or "contracts_finder"
+                if source == "fts":
+                    weekly[week_key]["fts"] += 1
+                else:
+                    weekly[week_key]["cf"] += 1
+                weekly[week_key]["score_sum"] += int(r[3] or 0)
+
+            trends = []
+            for wk in sorted(weekly.keys()):
+                d = weekly[wk]
+                d["avg_value"] = round(d["total_value"] / d["value_count"], 0) if d["value_count"] else 0
+                d["avg_score"] = round(d["score_sum"] / d["count"], 1) if d["count"] else 0
+                trends.append(d)
+
+            return {"trends": trends[-12:]}  # Last 12 weeks
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Pipeline CSV Export ────────────────────────────────────────────────────
+
+@app.get("/api/pipeline/export/csv")
+def export_pipeline_csv():
+    """Download pipeline data as CSV."""
+    import io
+    try:
+        from secureflex_intel.db import db_available, get_engine, pipeline_table
+        from sqlalchemy import select
+        from fastapi.responses import StreamingResponse
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(pipeline_table).order_by(pipeline_table.c.last_modified.desc())
+            ).fetchall()
+
+        columns = ["company_name", "status", "tier", "region", "contact_name", "contact_email",
+                   "next_action", "next_action_date", "source", "notes", "company_number",
+                   "company_type", "address", "website_url", "created_at", "last_modified"]
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(columns)
+        for r in rows:
+            d = dict(r._mapping)
+            writer.writerow([
+                str(d.get(col, "") or "").replace("\n", " ")[:500]
+                for col in columns
+            ])
+
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="secureflex_pipeline_{datetime.utcnow().strftime("%Y%m%d")}.csv"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Dossier PDF/HTML Export ────────────────────────────────────────────────
+
+@app.get("/api/dossier/{dossier_id}/export/pdf")
+def export_dossier_pdf(dossier_id: int):
+    """Download dossier as PDF (or HTML fallback)."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, dossiers_table
+        from sqlalchemy import select
+        from fastapi.responses import StreamingResponse
+        import io
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                select(dossiers_table).where(dossiers_table.c.id == dossier_id)
+            ).first()
+            if not row:
+                raise HTTPException(status_code=404, detail="Dossier not found")
+            d = dict(row._mapping)
+
+        markdown_content = d.get("dossier_markdown", "") or ""
+        company_name = d.get("company_name", "Dossier")
+        safe_name = company_name.replace(" ", "_")[:50]
+
+        # Convert markdown to HTML
+        try:
+            import markdown as md_lib
+            html_body = md_lib.markdown(markdown_content, extensions=["tables", "fenced_code"])
+        except ImportError:
+            # Simple fallback
+            html_body = f"<pre>{markdown_content}</pre>"
+
+        html_doc = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Dossier: {company_name}</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; color: #1a1a1a; line-height: 1.6; }}
+  h1 {{ color: #111827; border-bottom: 2px solid #3b82f6; padding-bottom: 8px; }}
+  h2 {{ color: #1f2937; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; margin-top: 24px; }}
+  h3 {{ color: #374151; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
+  th, td {{ border: 1px solid #d1d5db; padding: 8px 12px; text-align: left; }}
+  th {{ background: #f3f4f6; font-weight: 600; }}
+  a {{ color: #3b82f6; }}
+  blockquote {{ border-left: 3px solid #3b82f6; padding-left: 12px; color: #6b7280; margin: 12px 0; }}
+  code {{ background: #f3f4f6; padding: 2px 6px; border-radius: 4px; font-size: 0.9em; }}
+  .header {{ text-align: center; margin-bottom: 30px; }}
+  .header p {{ color: #6b7280; }}
+  .footer {{ margin-top: 40px; padding-top: 12px; border-top: 1px solid #e5e7eb; color: #9ca3af; font-size: 0.8em; text-align: center; }}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Sales Intelligence Dossier</h1>
+  <p>{company_name}</p>
+  <p>Generated: {d.get('generated_at', '')}</p>
+</div>
+{html_body}
+<div class="footer">
+  <p>SecureFlex Intel Platform &mdash; Confidential</p>
+</div>
+</body>
+</html>"""
+
+        # Try weasyprint for PDF
+        try:
+            from weasyprint import HTML as WeasyprintHTML
+            pdf_bytes = WeasyprintHTML(string=html_doc).write_pdf()
+            return StreamingResponse(
+                io.BytesIO(pdf_bytes),
+                media_type="application/pdf",
+                headers={"Content-Disposition": f'attachment; filename="dossier_{safe_name}.pdf"'},
+            )
+        except Exception as pdf_err:
+            print(f"[Dossier] PDF generation failed (falling back to HTML): {pdf_err}")
+            # Fallback: return as downloadable HTML
+            return StreamingResponse(
+                io.BytesIO(html_doc.encode("utf-8")),
+                media_type="text/html",
+                headers={"Content-Disposition": f'attachment; filename="dossier_{safe_name}.html"'},
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Dossier Export by Company Key ──────────────────────────────────────────
+
+@app.get("/api/dossier/export/by-company/{company_key}")
+def export_dossier_by_company_key(company_key: str):
+    """Download dossier as PDF/HTML by company key (used when dossier ID is not known)."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, dossiers_table
+        from sqlalchemy import select
+
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            row = conn.execute(
+                select(dossiers_table.c.id).where(
+                    dossiers_table.c.company_key == company_key.upper()
+                )
+            ).first()
+            if not row:
+                row = conn.execute(
+                    select(dossiers_table.c.id).where(
+                        dossiers_table.c.company_key == company_key
+                    )
+                ).first()
+            if not row:
+                raise HTTPException(status_code=404, detail="Dossier not found")
+
+        return export_dossier_pdf(dict(row._mapping)["id"])
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Auto-Dossier Helper ────────────────────────────────────────────────────
+
+def _trigger_auto_dossier(company_name: str, company_number: str = "",
+                          company_type: str = "", region: str = "",
+                          reason: str = "auto"):
+    """Background task: auto-generate a dossier for a company."""
+    try:
+        from secureflex_intel.dossier import generate_dossier
+        print(f"[AutoDossier] Generating for {company_name} (reason: {reason})")
+        result = generate_dossier(
+            company_name=company_name,
+            company_number=company_number,
+            company_type=company_type,
+            region=region,
+        )
+        _save_dossier_to_db(result, company_number, company_type, region)
+        print(f"[AutoDossier] Complete for {company_name}")
+    except Exception as e:
+        print(f"[AutoDossier] Failed for {company_name}: {e}")
+
+
+def _check_signal_count_dossier_trigger(company_number: str, company_name: str,
+                                         company_type: str = "", region: str = ""):
+    """If 3+ signals match a company, auto-trigger dossier generation."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, signal_matches_table, dossiers_table
+        from sqlalchemy import select, func
+        if not db_available():
+            return
+        engine = get_engine()
+        with engine.connect() as conn:
+            count = conn.execute(
+                select(func.count()).select_from(signal_matches_table)
+                .where(signal_matches_table.c.company_number == company_number)
+            ).scalar() or 0
+            if count >= 3:
+                # Check if dossier already exists
+                key = _dossier_company_key(company_number, company_name)
+                existing = conn.execute(
+                    select(dossiers_table.c.id).where(dossiers_table.c.company_key == key)
+                ).first()
+                if not existing:
+                    import threading
+                    t = threading.Thread(
+                        target=_trigger_auto_dossier,
+                        args=(company_name, company_number, company_type, region, "3+ signal matches"),
+                        daemon=True,
+                    )
+                    t.start()
+    except Exception as e:
+        print(f"[AutoDossier] Signal count check error: {e}")
 
 
 # ── Tier 1 Source Endpoints ─────────────────────────────────────────────────
