@@ -176,7 +176,7 @@ def get_status():
 
     # Try DB count first
     try:
-        from secureflex_intel.db import db_available, count_table, pipeline_table, tenders_table, prospects_table, signals_table, competitors_table
+        from secureflex_intel.db import db_available, count_table, pipeline_table, tenders_table, prospects_table, signals_table, competitors_table, dossiers_table
         if db_available():
             pipeline_count = count_table(pipeline_table)
             db_status = "connected"
@@ -185,7 +185,7 @@ def get_status():
                 "prospects": count_table(prospects_table),
                 "competitors": count_table(competitors_table),
                 "signals": count_table(signals_table),
-                "briefs": len([f for f in os.listdir(str(settings.briefs_dir)) if f.endswith(".md")]) if os.path.exists(str(settings.briefs_dir)) else 0,
+                "dossiers": count_table(dossiers_table),
             }
         else:
             raise Exception("DB not available")
@@ -203,7 +203,7 @@ def get_status():
             "tenders": count_files(settings.tenders_dir),
             "prospects": count_files(settings.prospects_dir),
             "signals": count_files(settings.signals_dir),
-            "briefs": count_files(settings.briefs_dir),
+            "dossiers": 0,
         }
 
     return {
@@ -212,7 +212,6 @@ def get_status():
         "database": db_status,
         "api_keys": {
             "companies_house": bool(settings.companies_house_api_key),
-            "openai": bool(settings.openai_api_key),
             "anthropic": bool(settings.anthropic_api_key),
         },
         "pipeline": {
@@ -469,28 +468,6 @@ def get_ai_status():
         return {"available": False}
 
 
-@app.post("/api/ai/brief/{company_id}")
-def generate_brief(company_id: str):
-    """Generate an AI-powered research brief for a pipeline lead."""
-    # Get the lead data
-    try:
-        from secureflex_intel.db import db_available, query_table, pipeline_table
-        if db_available():
-            rows = query_table(pipeline_table, filters={"company_id": company_id}, limit=1)
-            if not rows:
-                raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
-            lead = rows[0]
-        else:
-            raise HTTPException(status_code=503, detail="Database unavailable")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    from secureflex_intel.ai import generate_ai_brief
-    brief = generate_ai_brief(lead)
-    return {"company_id": company_id, "brief": brief}
-
 
 @app.post("/api/ai/analyze/tender")
 def analyze_tender(tender: Dict[str, Any]):
@@ -594,19 +571,6 @@ def generate_dossier_endpoint(
     # Persist to PostgreSQL (primary storage — survives redeployments)
     _save_dossier_to_db(result, company_number, company_type, region)
     result["company_key"] = _dossier_company_key(company_number, company_name)
-
-    # Also write to briefs dir as a human-readable backup
-    try:
-        safe_name = company_name.lower().replace(" ", "_").replace("/", "_")[:50]
-        filename = f"dossier_{safe_name}.md"
-        briefs_dir = str(settings.briefs_dir)
-        os.makedirs(briefs_dir, exist_ok=True)
-        filepath = os.path.join(briefs_dir, filename)
-        with open(filepath, "w") as f:
-            f.write(result["dossier_markdown"])
-        result["saved_as"] = filename
-    except Exception:
-        result["saved_as"] = None
 
     return result
 
@@ -1082,38 +1046,6 @@ def get_signals_report():
         "file": os.path.basename(latest_md) if latest_md else None,
     }
 
-
-# ── Briefs Endpoints ─────────────────────────────────────────────────────────
-
-@app.get("/api/briefs")
-def get_briefs():
-    """List all generated research briefs."""
-    briefs_dir = str(settings.briefs_dir)
-    if not os.path.exists(briefs_dir):
-        return {"total": 0, "briefs": []}
-    briefs = []
-    for f in sorted(os.listdir(briefs_dir)):
-        if f.endswith(".md"):
-            filepath = os.path.join(briefs_dir, f)
-            briefs.append({
-                "filename": f,
-                "company_id": f.split("_")[1] if "_" in f else "",
-                "company_name": f.replace("brief_", "").replace(".md", "").replace("_", " ").title(),
-                "size": os.path.getsize(filepath),
-                "last_modified": datetime.fromtimestamp(os.path.getmtime(filepath)).isoformat(),
-            })
-    return {"total": len(briefs), "briefs": briefs}
-
-
-@app.get("/api/briefs/{filename}")
-def get_brief(filename: str):
-    """Get a specific research brief."""
-    briefs_dir = str(settings.briefs_dir)
-    filepath = os.path.join(briefs_dir, filename)
-    if not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail=f"Brief {filename} not found")
-    content = read_markdown_file(filepath)
-    return {"filename": filename, "content": content}
 
 
 # ── Map Data (Combined GeoJSON) ─────────────────────────────────────────────

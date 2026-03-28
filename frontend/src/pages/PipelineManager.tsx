@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type Lead, type LeadCreatePayload, type LeadUpdatePayload } from '../lib/api'
 import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSpinner, EmptyState, ScoreBadge, StatusBadge, Table, Th, Td, Tr, Input } from '../components/ui'
 import { formatDate, formatRelativeTime, parseScore } from '../lib/utils'
-import { Kanban, TableIcon, Clock, Search, Plus, X, Save, Trash2, Sparkles, Edit3, ChevronDown, BookOpen, Loader2 } from 'lucide-react'
+import { Kanban, TableIcon, Clock, Search, Plus, X, Save, Trash2, Edit3, ChevronDown, BookOpen, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 
 const PIPELINE_STAGES = ['Not Contacted', 'Email 1 Sent', 'Email 2 Sent', 'Warm / Meeting', 'Pilot Live', 'Won']
@@ -279,8 +279,6 @@ function EditLeadPanel({ lead, onClose, onSaved }: { lead: Lead; onClose: () => 
     next_action_date: lead.next_action_date || lead.next_action_due_date || '',
   })
   const [error, setError] = useState('')
-  const [brief, setBrief] = useState<string | null>(null)
-  const [briefLoading, setBriefLoading] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const updateMutation = useMutation({
@@ -302,18 +300,6 @@ function EditLeadPanel({ lead, onClose, onSaved }: { lead: Lead; onClose: () => 
     },
     onError: (e: Error) => setError(e.message),
   })
-
-  const generateBrief = async () => {
-    setBriefLoading(true)
-    try {
-      const result = await api.aiBrief(lead.company_id)
-      setBrief(result.brief)
-    } catch {
-      setBrief('AI brief generation unavailable. Ensure ANTHROPIC_API_KEY is configured.')
-    } finally {
-      setBriefLoading(false)
-    }
-  }
 
   const set = (key: keyof LeadUpdatePayload, value: string) =>
     setForm(prev => ({ ...prev, [key]: value }))
@@ -442,33 +428,6 @@ function EditLeadPanel({ lead, onClose, onSaved }: { lead: Lead; onClose: () => 
               {error}
             </div>
           )}
-
-          {/* AI Brief section */}
-          <div className="border-t pt-4" style={{ borderColor: '#1f2937' }}>
-            <p className="text-xs uppercase tracking-wider mb-2" style={{ color: '#6b7280' }}>AI Research Brief</p>
-            {brief ? (
-              <div className="rounded-lg p-4" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
-                <div className="prose prose-invert prose-sm max-w-none" style={{ color: '#d1d5db', fontSize: '0.8rem', lineHeight: '1.5' }}>
-                  <ReactMarkdown>{brief}</ReactMarkdown>
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={generateBrief}
-                disabled={briefLoading}
-                className="flex items-center gap-2 justify-center py-2.5 rounded-lg text-xs font-medium w-full transition-all"
-                style={{
-                  background: 'rgba(168,85,247,0.15)',
-                  color: '#a855f7',
-                  border: '1px solid rgba(168,85,247,0.3)',
-                  opacity: briefLoading ? 0.6 : 1,
-                }}
-              >
-                <Sparkles size={13} />
-                {briefLoading ? 'Generating Brief...' : 'Generate AI Research Brief'}
-              </button>
-            )}
-          </div>
 
           {/* Sales Intelligence Dossier section */}
           <LeadDossier lead={lead} />

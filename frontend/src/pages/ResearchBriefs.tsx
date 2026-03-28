@@ -1,46 +1,23 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { api, type Brief, type DossierListItem, type DossierResponse } from '../lib/api'
-import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSpinner, EmptyState, Input } from '../components/ui'
+import { api, type DossierListItem, type DossierResponse } from '../lib/api'
+import { Button, PageHeader, LoadingSpinner, EmptyState } from '../components/ui'
 import { formatDate, formatRelativeTime } from '../lib/utils'
-import { BookOpen, FileText, ChevronRight, X, Sparkles, Loader2, Search, Plus } from 'lucide-react'
+import { BookOpen, ChevronRight, X, Sparkles, Loader2, Search, Plus } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)}MB`
-}
-
 export default function ResearchBriefs() {
-  const [selectedBrief, setSelectedBrief] = useState<Brief | null>(null)
   const [selectedDossier, setSelectedDossier] = useState<DossierListItem | null>(null)
   const [dossierContent, setDossierContent] = useState<DossierResponse | null>(null)
   const [dossierLoading, setDossierLoading] = useState(false)
   const [showGenerateForm, setShowGenerateForm] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
-  // DB-backed dossiers (primary, persistent)
-  const { data: dossierList, isLoading: dossiersLoading, refetch: refetchDossiers } = useQuery({
+  const { data: dossierList, isLoading, refetch: refetchDossiers } = useQuery({
     queryKey: ['dossier-list'],
     queryFn: api.listDossiers,
     refetchInterval: 60_000,
   })
-
-  // File-based briefs (legacy research briefs only, excluding dossier_ files)
-  const { data: briefs, isLoading: briefsLoading, refetch: refetchBriefs } = useQuery({
-    queryKey: ['briefs'],
-    queryFn: api.briefs,
-    refetchInterval: 60_000,
-  })
-
-  const { data: briefContent, isLoading: contentLoading } = useQuery({
-    queryKey: ['brief-content', selectedBrief?.filename],
-    queryFn: () => selectedBrief ? api.brief(selectedBrief.filename) : null,
-    enabled: !!selectedBrief,
-  })
-
-  const isLoading = dossiersLoading || briefsLoading
 
   const filteredDossiers = (dossierList?.dossiers || []).filter(d => {
     if (!searchQuery) return true
@@ -48,17 +25,7 @@ export default function ResearchBriefs() {
     return d.company_name?.toLowerCase().includes(q) || d.company_key?.toLowerCase().includes(q)
   })
 
-  // Only show non-dossier file-based briefs
-  const regularBriefs = (briefs?.briefs || []).filter(b => !b.filename.startsWith('dossier_')).filter(b => {
-    if (!searchQuery) return true
-    const q = searchQuery.toLowerCase()
-    return b.company_name?.toLowerCase().includes(q) || b.filename?.toLowerCase().includes(q)
-  })
-
-  const totalCount = filteredDossiers.length + regularBriefs.length
-
   const handleSelectDossier = async (item: DossierListItem) => {
-    setSelectedBrief(null)
     setSelectedDossier(item)
     setDossierContent(null)
     setDossierLoading(true)
@@ -70,13 +37,11 @@ export default function ResearchBriefs() {
     }
   }
 
-  const refetch = () => { refetchDossiers(); refetchBriefs() }
-
   return (
     <div className="flex flex-col flex-1 min-h-0">
       <PageHeader
-        title="RESEARCH BRIEFS & DOSSIERS"
-        subtitle={`${(dossierList?.total || 0) + (regularBriefs.length || 0)} intelligence documents — AI-generated company analysis and sales dossiers`}
+        title="SALES DOSSIERS"
+        subtitle={`${dossierList?.total || 0} AI-generated sales intelligence dossiers — persistent, searchable, and always available`}
         actions={
           <Button
             size="sm"
@@ -90,7 +55,7 @@ export default function ResearchBriefs() {
       />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Brief list */}
+        {/* Dossier list sidebar */}
         <div
           className="flex-shrink-0 border-r overflow-hidden flex flex-col"
           style={{ width: 340, background: '#0d1117', borderColor: '#1f2937' }}
@@ -101,7 +66,7 @@ export default function ResearchBriefs() {
               <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: '#6b7280' }} />
               <input
                 type="text"
-                placeholder="Search briefs..."
+                placeholder="Search dossiers..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 className="w-full text-xs rounded-lg pl-8 pr-3 py-2 border"
@@ -113,73 +78,59 @@ export default function ResearchBriefs() {
           <div className="flex-1 overflow-y-auto">
             {isLoading ? (
               <LoadingSpinner />
-            ) : totalCount === 0 ? (
+            ) : filteredDossiers.length === 0 ? (
               <EmptyState
                 icon={<BookOpen size={32} />}
-                title="No briefs yet"
+                title="No dossiers yet"
                 description={searchQuery
-                  ? 'No briefs match your search'
+                  ? 'No dossiers match your search'
                   : 'Generate dossiers from Prospect Explorer, Tender Radar, or Pipeline Manager — or use the button above'
                 }
               />
             ) : (
-              <div>
-                {/* DB-backed Dossiers section */}
-                {filteredDossiers.length > 0 && (
-                  <div>
-                    <div className="px-4 py-2 flex items-center gap-2" style={{ background: '#111827' }}>
-                      <BookOpen size={12} style={{ color: '#3b82f6' }} />
-                      <span className="text-xs font-medium uppercase tracking-wider" style={{ color: '#3b82f6' }}>
-                        Sales Dossiers ({filteredDossiers.length})
-                      </span>
+              <div className="divide-y divide-gray-800">
+                {filteredDossiers.map(item => (
+                  <button
+                    key={item.company_key}
+                    onClick={() => handleSelectDossier(item)}
+                    className="w-full text-left px-4 py-3 hover:bg-white/5 transition-colors"
+                    style={{
+                      background: selectedDossier?.company_key === item.company_key ? 'rgba(59,130,246,0.1)' : 'transparent',
+                      borderLeft: selectedDossier?.company_key === item.company_key ? '2px solid #3b82f6' : '2px solid transparent',
+                    }}
+                  >
+                    <div className="flex items-start gap-3">
+                      <BookOpen size={14} className="mt-0.5 flex-shrink-0" style={{ color: '#3b82f6' }} />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate" style={{ color: '#f9fafb' }}>
+                          {item.company_name}
+                        </p>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {item.company_type && (
+                            <span className="text-xs" style={{ color: '#6b7280' }}>{item.company_type}</span>
+                          )}
+                          <span className="text-xs" style={{ color: '#374151' }}>
+                            {formatRelativeTime(item.updated_at)}
+                          </span>
+                        </div>
+                      </div>
+                      <ChevronRight size={12} style={{ color: '#374151' }} />
                     </div>
-                    <div className="divide-y divide-gray-800">
-                      {filteredDossiers.map(item => (
-                        <DossierListItemRow
-                          key={item.company_key}
-                          item={item}
-                          selected={selectedDossier?.company_key === item.company_key}
-                          onClick={() => handleSelectDossier(item)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Regular briefs section */}
-                {regularBriefs.length > 0 && (
-                  <div>
-                    <div className="px-4 py-2 flex items-center gap-2" style={{ background: '#111827' }}>
-                      <FileText size={12} style={{ color: '#a855f7' }} />
-                      <span className="text-xs font-medium uppercase tracking-wider" style={{ color: '#a855f7' }}>
-                        Research Briefs ({regularBriefs.length})
-                      </span>
-                    </div>
-                    <div className="divide-y divide-gray-800">
-                      {regularBriefs.map(brief => (
-                        <BriefListItem
-                          key={brief.filename}
-                          brief={brief}
-                          selected={selectedBrief?.filename === brief.filename}
-                          onClick={() => { setSelectedBrief(brief); setSelectedDossier(null) }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
+                  </button>
+                ))}
               </div>
             )}
           </div>
         </div>
 
-        {/* Brief content */}
+        {/* Content pane */}
         <div className="flex-1 overflow-y-auto p-6">
           {showGenerateForm ? (
             <GenerateDossierForm
               onClose={() => setShowGenerateForm(false)}
               onGenerated={() => {
                 setShowGenerateForm(false)
-                refetch()
+                refetchDossiers()
               }}
             />
           ) : selectedDossier ? (
@@ -191,55 +142,15 @@ export default function ResearchBriefs() {
                 onRegenerated={() => { handleSelectDossier(selectedDossier); refetchDossiers() }}
               />
             ) : null
-          ) : !selectedBrief ? (
+          ) : (
             <div className="flex flex-col items-center justify-center h-full">
               <BookOpen size={48} style={{ color: '#1f2937' }} />
-              <p className="mt-4 text-sm" style={{ color: '#374151' }}>Select a brief or dossier to view</p>
+              <p className="mt-4 text-sm" style={{ color: '#374151' }}>Select a dossier to view</p>
               <p className="text-xs mt-1" style={{ color: '#1f2937' }}>
                 Or generate a new Sales Intelligence Dossier using the button above
               </p>
             </div>
-          ) : contentLoading ? (
-            <LoadingSpinner />
-          ) : briefContent ? (
-            <div>
-              <div className="flex items-center justify-between mb-6">
-                <div>
-                  <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(168,85,247,0.15)', color: '#a855f7', border: '1px solid rgba(168,85,247,0.3)' }}>
-                    Research Brief
-                  </span>
-                  <h2 className="text-lg font-bold mt-1" style={{ color: '#f9fafb' }}>
-                    {selectedBrief.company_name || selectedBrief.company_id}
-                  </h2>
-                  <p className="text-xs mt-0.5" style={{ color: '#6b7280' }}>
-                    Generated {formatDate(selectedBrief.last_modified)} · {formatFileSize(selectedBrief.size)}
-                  </p>
-                </div>
-                <Button size="sm" variant="ghost" onClick={() => setSelectedBrief(null)}>
-                  <X size={14} />
-                </Button>
-              </div>
-              <div className="rounded-xl border p-6" style={{ background: '#111827', borderColor: '#1f2937' }}>
-                <div className="prose prose-sm max-w-none" style={{ color: '#d1d5db' }}>
-                  <style>{`
-                    .prose h1, .prose h2, .prose h3 { color: #f9fafb; }
-                    .prose h1 { font-size: 1.25rem; margin-top: 0.5rem; }
-                    .prose h2 { font-size: 1.1rem; margin-top: 1rem; border-bottom: 1px solid #1f2937; padding-bottom: 0.25rem; }
-                    .prose h3 { font-size: 0.95rem; }
-                    .prose strong { color: #f9fafb; }
-                    .prose a { color: #3b82f6; }
-                    .prose code { background: #1f2937; color: #f9fafb; padding: 2px 6px; border-radius: 4px; }
-                    .prose pre { background: #0d1117; border: 1px solid #374151; }
-                    .prose blockquote { border-left-color: #374151; color: #9ca3af; }
-                    .prose hr { border-color: #1f2937; }
-                    .prose ul li::marker { color: #3b82f6; }
-                    .prose ol li::marker { color: #3b82f6; }
-                  `}</style>
-                  <ReactMarkdown>{briefContent.content}</ReactMarkdown>
-                </div>
-              </div>
-            </div>
-          ) : null}
+          )}
         </div>
       </div>
     </div>
@@ -247,48 +158,26 @@ export default function ResearchBriefs() {
 }
 
 
-/** DB-backed dossier list item */
-function DossierListItemRow({
-  item,
-  selected,
-  onClick,
-}: {
-  item: DossierListItem
-  selected: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full text-left px-4 py-3 hover:bg-white/5 transition-colors"
-      style={{
-        background: selected ? 'rgba(59,130,246,0.1)' : 'transparent',
-        borderLeft: selected ? '2px solid #3b82f6' : '2px solid transparent',
-      }}
-    >
-      <div className="flex items-start gap-3">
-        <BookOpen size={14} className="mt-0.5 flex-shrink-0" style={{ color: '#3b82f6' }} />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate" style={{ color: '#f9fafb' }}>
-            {item.company_name}
-          </p>
-          <div className="flex items-center gap-2 mt-0.5">
-            {item.company_type && (
-              <span className="text-xs" style={{ color: '#6b7280' }}>{item.company_type}</span>
-            )}
-            <span className="text-xs" style={{ color: '#374151' }}>
-              {formatRelativeTime(item.updated_at)}
-            </span>
-          </div>
-        </div>
-        <ChevronRight size={12} style={{ color: '#374151' }} />
-      </div>
-    </button>
-  )
-}
+const markdownStyles = `
+  .prose h1, .prose h2, .prose h3 { color: #f9fafb; }
+  .prose h1 { font-size: 1.25rem; margin-top: 0.5rem; }
+  .prose h2 { font-size: 1.1rem; margin-top: 1rem; border-bottom: 1px solid #1f2937; padding-bottom: 0.25rem; }
+  .prose h3 { font-size: 0.95rem; }
+  .prose strong { color: #f9fafb; }
+  .prose a { color: #3b82f6; }
+  .prose code { background: #1f2937; color: #f9fafb; padding: 2px 6px; border-radius: 4px; }
+  .prose pre { background: #0d1117; border: 1px solid #374151; }
+  .prose blockquote { border-left-color: #3b82f6; color: #9ca3af; background: rgba(59,130,246,0.05); padding: 0.5rem 1rem; border-radius: 0 0.25rem 0.25rem 0; }
+  .prose hr { border-color: #1f2937; }
+  .prose ul li::marker { color: #3b82f6; }
+  .prose ol li::marker { color: #3b82f6; }
+  .prose table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  .prose th { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid #374151; color: #9ca3af; font-weight: 600; }
+  .prose td { padding: 0.4rem 0.6rem; border-bottom: 1px solid #1f2937; color: #d1d5db; }
+  .prose tr:hover td { background: rgba(59,130,246,0.03); }
+`
 
 
-/** Full dossier viewer for the content pane */
 function DossierViewer({
   item,
   dossier,
@@ -323,7 +212,7 @@ function DossierViewer({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
@@ -339,7 +228,7 @@ function DossierViewer({
           <p className="text-xs mt-0.5" style={{ color: '#6b7280' }}>
             Updated {formatDate(item.updated_at)}
             {item.source_count > 0 && ` · ${item.source_count} sources`}
-            {item.company_number && ` · ${item.company_number}`}
+            {item.company_number && ` · CH#${item.company_number}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -356,7 +245,7 @@ function DossierViewer({
           </Button>
         </div>
       </div>
-      {error && <p className="text-xs mb-4" style={{ color: '#ef4444' }}>{error}</p>}
+      {error && <p className="text-xs mb-3" style={{ color: '#ef4444' }}>{error}</p>}
       {dossier.sources_used && dossier.sources_used.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-4">
           {dossier.sources_used.map((s, i) => (
@@ -368,20 +257,7 @@ function DossierViewer({
       )}
       <div className="rounded-xl border p-6" style={{ background: '#111827', borderColor: '#1f2937' }}>
         <div className="prose prose-sm max-w-none" style={{ color: '#d1d5db' }}>
-          <style>{`
-            .prose h1, .prose h2, .prose h3 { color: #f9fafb; }
-            .prose h1 { font-size: 1.25rem; margin-top: 0.5rem; }
-            .prose h2 { font-size: 1.1rem; margin-top: 1rem; border-bottom: 1px solid #1f2937; padding-bottom: 0.25rem; }
-            .prose h3 { font-size: 0.95rem; }
-            .prose strong { color: #f9fafb; }
-            .prose a { color: #3b82f6; }
-            .prose code { background: #1f2937; color: #f9fafb; padding: 2px 6px; border-radius: 4px; }
-            .prose pre { background: #0d1117; border: 1px solid #374151; }
-            .prose blockquote { border-left-color: #374151; color: #9ca3af; }
-            .prose hr { border-color: #1f2937; }
-            .prose ul li::marker { color: #3b82f6; }
-            .prose ol li::marker { color: #3b82f6; }
-          `}</style>
+          <style>{markdownStyles}</style>
           <ReactMarkdown>{dossier.dossier_markdown}</ReactMarkdown>
         </div>
       </div>
@@ -390,51 +266,6 @@ function DossierViewer({
 }
 
 
-/** Brief list item component */
-function BriefListItem({
-  brief,
-  selected,
-  onClick,
-  isDossier,
-}: {
-  brief: Brief
-  selected: boolean
-  onClick: () => void
-  isDossier?: boolean
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className="w-full text-left px-4 py-3 hover:bg-white/5 transition-colors"
-      style={{
-        background: selected ? (isDossier ? 'rgba(59,130,246,0.1)' : 'rgba(168,85,247,0.1)') : 'transparent',
-        borderLeft: selected
-          ? `2px solid ${isDossier ? '#3b82f6' : '#a855f7'}`
-          : '2px solid transparent',
-      }}
-    >
-      <div className="flex items-start gap-3">
-        {isDossier ? (
-          <BookOpen size={14} className="mt-0.5 flex-shrink-0" style={{ color: '#3b82f6' }} />
-        ) : (
-          <FileText size={14} className="mt-0.5 flex-shrink-0" style={{ color: '#a855f7' }} />
-        )}
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium truncate" style={{ color: '#f9fafb' }}>
-            {brief.company_name || brief.company_id}
-          </p>
-          <p className="text-xs mt-0.5" style={{ color: '#6b7280' }}>
-            {formatFileSize(brief.size)} · {formatRelativeTime(brief.last_modified)}
-          </p>
-        </div>
-        <ChevronRight size={12} style={{ color: '#374151' }} />
-      </div>
-    </button>
-  )
-}
-
-
-/** Generate a new dossier from scratch */
 function GenerateDossierForm({
   onClose,
   onGenerated,
@@ -482,7 +313,7 @@ function GenerateDossierForm({
   if (result) {
     return (
       <div>
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4">
           <div>
             <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}>
               Sales Dossier
@@ -507,16 +338,7 @@ function GenerateDossierForm({
         )}
         <div className="rounded-xl border p-6" style={{ background: '#111827', borderColor: '#1f2937' }}>
           <div className="prose prose-sm max-w-none" style={{ color: '#d1d5db' }}>
-            <style>{`
-              .prose h1, .prose h2, .prose h3 { color: #f9fafb; }
-              .prose h1 { font-size: 1.25rem; margin-top: 0.5rem; }
-              .prose h2 { font-size: 1.1rem; margin-top: 1rem; border-bottom: 1px solid #1f2937; padding-bottom: 0.25rem; }
-              .prose strong { color: #f9fafb; }
-              .prose a { color: #3b82f6; }
-              .prose blockquote { border-left-color: #374151; color: #9ca3af; }
-              .prose ul li::marker { color: #3b82f6; }
-              .prose ol li::marker { color: #3b82f6; }
-            `}</style>
+            <style>{markdownStyles}</style>
             <ReactMarkdown>{result.dossier_markdown}</ReactMarkdown>
           </div>
         </div>
@@ -648,12 +470,10 @@ function GenerateDossierForm({
             <strong style={{ color: '#9ca3af' }}>What the dossier includes:</strong>
           </p>
           <ul className="text-xs mt-1 space-y-0.5" style={{ color: '#6b7280' }}>
-            <li>Executive summary and opportunity rating</li>
-            <li>Company profile from Companies House (directors, filings, accounts)</li>
-            <li>Live news articles and public information from Google News</li>
-            <li>Security needs assessment based on sector and signals</li>
-            <li>Key contacts and decision makers</li>
-            <li>Conversation strategy with talking points and discovery questions</li>
+            <li>Company profile with directors and filing status</li>
+            <li>Live news articles from Google News</li>
+            <li>Security needs assessment based on sector</li>
+            <li>Call strategy with opening hook and talking points</li>
             <li>Risk factors and red flags</li>
           </ul>
         </div>
@@ -671,7 +491,7 @@ function GenerateDossierForm({
           {loading ? (
             <>
               <Loader2 size={16} className="animate-spin" />
-              Generating comprehensive dossier — this takes 15-30 seconds...
+              Generating dossier — this takes 15-30 seconds...
             </>
           ) : (
             <>

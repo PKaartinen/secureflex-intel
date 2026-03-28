@@ -121,7 +121,7 @@ export default function Analytics() {
     { subject: 'Signals', A: Math.min(100, (signals?.total || 0) * 5) },
     { subject: 'Pipeline', A: Math.min(100, (pipelineStats?.total || 0) * 3) },
     { subject: 'Competitors', A: Math.min(100, (competitors?.total || 0) / 5) },
-    { subject: 'Briefs', A: Math.min(100, (status?.data_counts.briefs || 0) * 10) },
+    { subject: 'Dossiers', A: Math.min(100, (status?.data_counts.dossiers || 0) * 10) },
   ]
 
   if (statsLoading) return <LoadingSpinner />

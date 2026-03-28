@@ -215,9 +215,9 @@ export default function ScanControl() {
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-xs" style={{ color: '#6b7280' }}>OpenAI API</span>
-                    <span className="text-xs" style={{ color: status.api_keys.openai ? '#22c55e' : '#ef4444' }}>
-                      {status.api_keys.openai ? 'Connected' : 'Not configured'}
+                    <span className="text-xs" style={{ color: '#6b7280' }}>Anthropic API (Claude)</span>
+                    <span className="text-xs" style={{ color: status.api_keys.anthropic ? '#22c55e' : '#ef4444' }}>
+                      {status.api_keys.anthropic ? 'Connected' : 'Not configured'}
                     </span>
                   </div>
                   <div className="border-t pt-3" style={{ borderColor: '#1f2937' }}>

@@ -24,9 +24,9 @@ export interface StatusResponse {
   status: string
   timestamp: string
   database?: string
-  api_keys: { companies_house: boolean; openai: boolean; anthropic?: boolean }
+  api_keys: { companies_house: boolean; anthropic?: boolean }
   pipeline: { path: string; exists: boolean; lead_count: number }
-  data_counts: { tenders: number; prospects: number; competitors?: number; signals: number; briefs: number }
+  data_counts: { tenders: number; prospects: number; competitors?: number; signals: number; dossiers: number }
   settings: { tender_region: string; tender_days_back: number; prospector_region: string; max_results: number }
 }
 
@@ -201,19 +201,6 @@ export interface FeedResponse {
   generated_at: string
 }
 
-export interface Brief {
-  filename: string
-  company_id: string
-  company_name: string
-  size: number
-  last_modified: string
-}
-
-export interface BriefsResponse {
-  total: number
-  briefs: Brief[]
-}
-
 export interface GeoJSONFeature {
   type: 'Feature'
   geometry: { type: 'Point'; coordinates: [number, number] }
@@ -365,10 +352,6 @@ export const api = {
 
   signalsReport: () => get<{ content: string; file: string | null }>('/signals/report'),
 
-  briefs: () => get<BriefsResponse>('/briefs'),
-
-  brief: (filename: string) => get<{ filename: string; content: string }>(`/briefs/${filename}`),
-
   mapAll: (params?: { prospect_limit?: number; competitor_limit?: number }) => {
     const q = new URLSearchParams()
     if (params?.prospect_limit) q.set('prospect_limit', String(params.prospect_limit))
@@ -399,7 +382,6 @@ export const api = {
 
   // AI
   aiStatus: () => get<{ available: boolean }>('/ai/status'),
-  aiBrief: (companyId: string) => post<{ company_id: string; brief: string }>(`/ai/brief/${companyId}`),
   aiAnalyzeTender: (tender: Record<string, unknown>) => post<{ analysis: string }>('/ai/analyze/tender', tender),
   aiAnalyzeProspect: (prospect: Record<string, unknown>) => post<{ analysis: string }>('/ai/analyze/prospect', prospect),
 

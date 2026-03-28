@@ -53,9 +53,9 @@ export default function Settings() {
 
                   <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
                     <div>
-                      <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>OpenAI API</p>
+                      <p className="text-sm font-medium" style={{ color: '#f9fafb' }}>Anthropic API (Claude)</p>
                       <p className="text-xs mt-0.5" style={{ color: '#6b7280' }}>
-                        Required for AI-generated research briefs and intelligence summaries
+                        Powers AI sales dossiers, prospect analysis, and tender fit assessments
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -63,11 +63,11 @@ export default function Settings() {
                         className="rounded-full"
                         style={{
                           width: 8, height: 8,
-                          background: status?.api_keys.openai ? '#22c55e' : '#ef4444',
+                          background: status?.api_keys.anthropic ? '#22c55e' : '#ef4444',
                         }}
                       />
-                      <span className="text-xs" style={{ color: status?.api_keys.openai ? '#22c55e' : '#ef4444' }}>
-                        {status?.api_keys.openai ? 'Configured' : 'Not configured'}
+                      <span className="text-xs" style={{ color: status?.api_keys.anthropic ? '#22c55e' : '#ef4444' }}>
+                        {status?.api_keys.anthropic ? 'Configured' : 'Not configured'}
                       </span>
                     </div>
                   </div>
@@ -85,7 +85,7 @@ export default function Settings() {
                         </p>
                         <div className="mt-2 rounded p-2 font-mono text-xs" style={{ background: '#0d1117', color: '#22c55e' }}>
                           <p>COMPANIES_HOUSE_API_KEY=your_key_here</p>
-                          <p>OPENAI_API_KEY=your_key_here</p>
+                          <p>ANTHROPIC_API_KEY=your_key_here</p>
                         </div>
                         <p className="text-xs mt-2" style={{ color: '#6b7280' }}>
                           Go to Railway dashboard &rarr; Service &rarr; Variables to configure.

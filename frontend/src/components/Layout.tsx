@@ -17,7 +17,7 @@ const navItems = [
   { path: '/prospects', label: 'Prospect Explorer', icon: Building2 },
   { path: '/competitors', label: 'Competitor Watch', icon: Eye },
   { path: '/signals', label: 'Signal Feed', icon: Rss },
-  { path: '/briefs', label: 'Research Briefs', icon: BookOpen },
+  { path: '/briefs', label: 'Sales Dossiers', icon: BookOpen },
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
   { path: '/scans', label: 'Scan Control', icon: ScanLine },
   { path: '/settings', label: 'Settings', icon: Settings },

@@ -608,69 +608,60 @@ This company appears in our competitor database. They are a known security servi
 
     full_context = "\n\n".join(context_parts)
 
-    prompt = f"""You are a senior business intelligence analyst at SecureFlex, a London-based security services company 
-that provides manned guarding, CCTV monitoring, access control, event security, mobile patrols, and corporate security solutions.
+    prompt = f"""You are a senior sales intelligence analyst at SecureFlex (London-based security services: manned guarding, CCTV, access control, event security, mobile patrols, corporate security).
 
-Your task is to produce a **Sales Intelligence Dossier** — a comprehensive, actionable document that the Head of Sales 
-will use to prepare for a phone call with this company. The dossier must consolidate ALL the data provided below into 
-a clear, well-structured document that gives a complete picture of the company and the sales opportunity.
+Produce a **Sales Intelligence Dossier** — a dense, scannable reference document the Head of Sales will use to prepare for a phone call with this company.
 
-**IMPORTANT GUIDELINES:**
-- This is a WORKING DOCUMENT for a sales professional, not an academic report
-- Be specific and actionable — every section should help the salesperson prepare for the call
-- Highlight any red flags (overdue filings, insolvency, competitor status) prominently
-- If news articles reveal anything about the company's current situation, financial health, expansion plans, 
-  security incidents, or leadership changes — weave these insights throughout the dossier
-- If there are gaps in the data, explicitly note what's missing and suggest how to find it
-- Include specific talking points and conversation openers based on the available intelligence
-- Format phone numbers and emails clearly if available — these are gold for the sales team
+**FORMAT RULES — STRICTLY FOLLOW:**
+- Maximum information density. NO filler prose, NO generic business advice, NO padding.
+- Use **bullet points, tables, and short labelled lines** throughout — never multi-sentence paragraphs.
+- Every line must contain a concrete fact, insight, or actionable item. Delete anything a salesperson would skip.
+- If data is unavailable for a field, write "Unknown" on one line and move on — do NOT speculate or pad.
+- Keep the TOTAL output under 1500 words. Brevity is mandatory.
+- Use bold labels (e.g. **Status:** Active) for scannable key-value pairs.
+- Use markdown tables where comparing items (officers, news, services).
 
-Write the dossier in Markdown format with these sections:
+Write the dossier in this exact structure:
 
-# Sales Intelligence Dossier: [Company Name]
+# [Company Name]
+**Opportunity:** High / Medium / Low | **Sector:** [type] | **Region:** [region] | **CH#:** [number]
 
-## 1. Executive Summary
-A 3-4 sentence overview: who they are, why they're a prospect, and the key opportunity. Include a clear 
-**Opportunity Rating** (High / Medium / Low) with brief justification.
+> One-line summary: who they are and why they matter to SecureFlex.
 
-## 2. Company Profile
-Structured overview: legal status, incorporation date, SIC codes explained in plain English, registered address, 
-active directors with roles, and any notable corporate structure observations.
+## Company Profile
+Use a compact key-value list:
+- **Status / Incorporated / SIC / Address / Accounts Due / Charges / Insolvency**
+- Flag anything overdue or concerning with a warning marker.
 
-## 3. Business Context & Current Situation
-What does this company actually DO? Use SIC codes, website info, and news to paint a picture. 
-Are they growing, stable, or declining? Any recent news that indicates their current trajectory?
+## Directors & Key Contacts
+Markdown table: | Name | Role | Appointed | Status | Contact |
+Identify the likely security decision-maker with a note. Include any emails/phones/LinkedIn found.
 
-## 4. Security Needs Assessment
-Based on their sector, size, location, and any available signals — what security services would they likely need?
-Be specific: manned guarding, CCTV, access control, event security, mobile patrols, etc.
-If there's evidence of a current security provider, note it.
+## Business Situation
+3-5 bullet points maximum. What do they do, how are they doing, any growth/decline signals from news or filings. No prose.
 
-## 5. News & Market Intelligence
-Summarise all relevant news articles and public information. What do these tell us about the company's 
-current priorities, challenges, and opportunities? How can SecureFlex position itself in light of this news?
+## News & Intelligence
+Markdown table: | Date | Headline | Source | Relevance |
+One row per article. Add a 1-2 line "Key takeaway" row below the table summarising what the news means for SecureFlex's approach.
 
-## 6. Key Contacts & Decision Makers
-List directors/officers with their roles. Identify who is most likely the decision maker for security services.
-Include any contact information found (emails, phones, LinkedIn).
+## Security Needs
+Bullet list of specific services they likely need (manned guarding, CCTV, access control, etc.) with a one-line rationale per item. Note any evidence of a current security provider.
 
-## 7. Conversation Strategy
-- **Opening Hook:** A specific, personalised conversation opener based on the intelligence gathered
-- **Key Talking Points:** 5 specific points to raise, tied to their actual business situation
-- **Discovery Questions:** 5 targeted questions to uncover their security needs and budget
-- **Objection Handling:** 2-3 likely objections and how to address them
-- **Value Proposition:** How to position SecureFlex's specific services for THIS company
+## Call Strategy
+- **Opening hook:** One specific, personalised sentence to open the call.
+- **3 talking points:** Tied to their actual situation (news, sector, location).
+- **3 discovery questions:** Targeted to uncover needs and budget.
+- **Likely objection + response:** One most probable objection and how to handle it.
 
-## 8. Risk Factors & Red Flags
-Any concerns: overdue filings, insolvency history, competitor status, negative news, etc.
-Be honest — the sales team needs to know what they're walking into.
+## Risk Factors
+Bullet list only. Overdue filings, insolvency, competitor status, negative news, payment concerns. If none, write "No red flags identified."
 
-## 9. Recommended Next Steps
-Numbered action items: what to do before the call, during the call, and after the call.
+## Next Steps
+3 numbered actions: before call, during call, after call. One line each.
 
-## 10. Data Sources & Confidence Level
-List all sources used and note the overall confidence level of this dossier (High / Medium / Low) 
-based on data completeness.
+## Sources & Confidence
+- Sources: [comma-separated list]
+- Confidence: High / Medium / Low — one-line justification.
 
 ---
 
@@ -680,12 +671,12 @@ based on data completeness.
 
 **Sources consulted:** {', '.join(sources) if sources else 'Limited internal data only'}
 
-Generate the complete dossier now. Be thorough but practical."""
+Generate the dossier now. Be ruthlessly concise — every word must earn its place."""
 
     try:
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=4000,
+            max_tokens=2500,
             messages=[{"role": "user", "content": prompt}],
         )
         return message.content[0].text
