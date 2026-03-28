@@ -165,6 +165,21 @@ scan_runs_table = Table("scan_runs", metadata,
     Column("error", Text, nullable=True),
 )
 
+dossiers_table = Table("dossiers", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    # Primary lookup key — company_number when available, else slugified name
+    Column("company_key", String(100), unique=True, nullable=False),
+    Column("company_name", Text),
+    Column("company_number", String(20), nullable=True),
+    Column("company_type", String(200), nullable=True),
+    Column("region", String(200), nullable=True),
+    Column("dossier_markdown", Text),
+    Column("sources_used", Text),       # JSON array stored as text
+    Column("data_summary", Text),       # JSON object stored as text
+    Column("generated_at", DateTime, default=datetime.utcnow),
+    Column("updated_at", DateTime, default=datetime.utcnow),
+)
+
 def init_db():
     """Create all tables if they don't exist."""
     engine = get_engine()

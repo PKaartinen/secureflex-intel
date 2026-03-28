@@ -510,6 +510,58 @@ def analyze_prospect(prospect: Dict[str, Any]):
 
 # ── Dossier Endpoints ───────────────────────────────────────────────────────
 
+def _dossier_company_key(company_number: str, company_name: str) -> str:
+    """Derive a stable lookup key: company number if available, else slugified name."""
+    if company_number and company_number.strip():
+        return company_number.strip().upper()
+    safe = company_name.lower().strip().replace(" ", "_")
+    import re as _re
+    safe = _re.sub(r"[^a-z0-9_]", "", safe)[:80]
+    return f"name_{safe}"
+
+
+def _save_dossier_to_db(result: Dict[str, Any], company_number: str, company_type: str, region: str):
+    """Upsert a generated dossier into the dossiers table."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, dossiers_table
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        if not db_available():
+            return
+        company_name = result.get("company_name", "")
+        company_key = _dossier_company_key(company_number, company_name)
+        row = {
+            "company_key": company_key,
+            "company_name": company_name,
+            "company_number": company_number or None,
+            "company_type": company_type or None,
+            "region": region or None,
+            "dossier_markdown": result.get("dossier_markdown", ""),
+            "sources_used": json.dumps(result.get("sources_used", [])),
+            "data_summary": json.dumps(result.get("data_summary", {})),
+            "generated_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        }
+        engine = get_engine()
+        with engine.begin() as conn:
+            stmt = pg_insert(dossiers_table).values(**row)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["company_key"],
+                set_={
+                    "dossier_markdown": stmt.excluded.dossier_markdown,
+                    "sources_used": stmt.excluded.sources_used,
+                    "data_summary": stmt.excluded.data_summary,
+                    "company_name": stmt.excluded.company_name,
+                    "company_type": stmt.excluded.company_type,
+                    "region": stmt.excluded.region,
+                    "updated_at": stmt.excluded.updated_at,
+                }
+            )
+            conn.execute(stmt)
+        print(f"[Dossier] Saved to DB with key: {company_key}")
+    except Exception as e:
+        print(f"[Dossier] Failed to save to DB: {e}")
+
+
 @app.post("/api/dossier/generate")
 def generate_dossier_endpoint(
     background_tasks: BackgroundTasks,
@@ -518,24 +570,32 @@ def generate_dossier_endpoint(
     """Generate a comprehensive Sales Intelligence Dossier for a company.
     
     Accepts: { company_name, company_number?, company_type?, region?, sic_codes?, address?, website_url? }
-    Returns: { company_name, generated_at, dossier_markdown, sources_used, data_summary }
+    Returns: { company_name, generated_at, dossier_markdown, sources_used, data_summary, company_key }
     """
     company_name = payload.get("company_name", "").strip()
     if not company_name:
         raise HTTPException(status_code=400, detail="company_name is required")
-    
+
+    company_number = payload.get("company_number", "").strip()
+    company_type = payload.get("company_type", "")
+    region = payload.get("region", "")
+
     from secureflex_intel.dossier import generate_dossier
     result = generate_dossier(
         company_name=company_name,
-        company_number=payload.get("company_number", ""),
-        company_type=payload.get("company_type", ""),
-        region=payload.get("region", ""),
+        company_number=company_number,
+        company_type=company_type,
+        region=region,
         sic_codes=payload.get("sic_codes", ""),
         address=payload.get("address", ""),
         website_url=payload.get("website_url", ""),
     )
-    
-    # Also save the dossier as a brief file for future reference
+
+    # Persist to PostgreSQL (primary storage — survives redeployments)
+    _save_dossier_to_db(result, company_number, company_type, region)
+    result["company_key"] = _dossier_company_key(company_number, company_name)
+
+    # Also write to briefs dir as a human-readable backup
     try:
         safe_name = company_name.lower().replace(" ", "_").replace("/", "_")[:50]
         filename = f"dossier_{safe_name}.md"
@@ -545,36 +605,108 @@ def generate_dossier_endpoint(
         with open(filepath, "w") as f:
             f.write(result["dossier_markdown"])
         result["saved_as"] = filename
-    except Exception as e:
+    except Exception:
         result["saved_as"] = None
-        print(f"[Dossier] Failed to save brief file: {e}")
-    
+
     return result
 
 
+@app.get("/api/dossier/by-company/{company_key}")
+def get_dossier_by_company(company_key: str):
+    """Retrieve a persisted dossier by company key (company number or name slug).
+    
+    Returns 404 if no dossier has been generated yet for this company.
+    """
+    try:
+        from secureflex_intel.db import db_available, get_engine, dossiers_table
+        from sqlalchemy import select
+        if db_available():
+            engine = get_engine()
+            with engine.connect() as conn:
+                # Try exact key match first
+                stmt = select(dossiers_table).where(
+                    dossiers_table.c.company_key == company_key.upper()
+                )
+                row = conn.execute(stmt).first()
+                if not row:
+                    # Try name-slug variant
+                    stmt = select(dossiers_table).where(
+                        dossiers_table.c.company_key == company_key
+                    )
+                    row = conn.execute(stmt).first()
+                if row:
+                    d = dict(row._mapping)
+                    return {
+                        "company_key": d["company_key"],
+                        "company_name": d["company_name"],
+                        "company_number": d["company_number"],
+                        "company_type": d["company_type"],
+                        "region": d["region"],
+                        "dossier_markdown": d["dossier_markdown"],
+                        "sources_used": json.loads(d["sources_used"]) if d["sources_used"] else [],
+                        "data_summary": json.loads(d["data_summary"]) if d["data_summary"] else {},
+                        "generated_at": d["generated_at"].isoformat() if hasattr(d["generated_at"], "isoformat") else str(d["generated_at"]),
+                        "updated_at": d["updated_at"].isoformat() if hasattr(d["updated_at"], "isoformat") else str(d["updated_at"]),
+                    }
+    except Exception as e:
+        print(f"[Dossier] Lookup failed: {e}")
+    raise HTTPException(status_code=404, detail="No dossier found for this company")
+
+
+@app.get("/api/dossier/list")
+def list_dossiers():
+    """List all persisted dossiers from the database."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, dossiers_table
+        from sqlalchemy import select
+        if db_available():
+            engine = get_engine()
+            with engine.connect() as conn:
+                stmt = select(
+                    dossiers_table.c.id,
+                    dossiers_table.c.company_key,
+                    dossiers_table.c.company_name,
+                    dossiers_table.c.company_number,
+                    dossiers_table.c.company_type,
+                    dossiers_table.c.region,
+                    dossiers_table.c.generated_at,
+                    dossiers_table.c.updated_at,
+                    dossiers_table.c.sources_used,
+                ).order_by(dossiers_table.c.updated_at.desc())
+                rows = conn.execute(stmt).fetchall()
+                dossiers = []
+                for r in rows:
+                    d = dict(r._mapping)
+                    sources = json.loads(d["sources_used"]) if d["sources_used"] else []
+                    dossiers.append({
+                        "id": d["id"],
+                        "company_key": d["company_key"],
+                        "company_name": d["company_name"],
+                        "company_number": d["company_number"],
+                        "company_type": d["company_type"],
+                        "region": d["region"],
+                        "source_count": len(sources),
+                        "generated_at": d["generated_at"].isoformat() if hasattr(d["generated_at"], "isoformat") else str(d["generated_at"]),
+                        "updated_at": d["updated_at"].isoformat() if hasattr(d["updated_at"], "isoformat") else str(d["updated_at"]),
+                    })
+                return {"total": len(dossiers), "dossiers": dossiers}
+    except Exception as e:
+        print(f"[Dossier] List failed: {e}")
+    return {"total": 0, "dossiers": []}
+
+
 @app.get("/api/dossier/{company_id}")
-def get_saved_dossier(company_id: str):
-    """Get a previously generated dossier for a pipeline lead."""
-    # Look up the lead to get company name
+def get_saved_dossier_legacy(company_id: str):
+    """Legacy: get dossier by pipeline lead company_id. Redirects to by-company lookup."""
     try:
         from secureflex_intel.db import db_available, query_table, pipeline_table
         if db_available():
             rows = query_table(pipeline_table, filters={"company_id": company_id}, limit=1)
             if rows:
+                company_number = rows[0].get("company_number", "")
                 company_name = rows[0].get("company_name", "")
-                safe_name = company_name.lower().replace(" ", "_").replace("/", "_")[:50]
-                filename = f"dossier_{safe_name}.md"
-                briefs_dir = str(settings.briefs_dir)
-                filepath = os.path.join(briefs_dir, filename)
-                if os.path.exists(filepath):
-                    with open(filepath, "r") as f:
-                        content = f.read()
-                    return {
-                        "company_id": company_id,
-                        "company_name": company_name,
-                        "dossier_markdown": content,
-                        "generated_at": datetime.fromtimestamp(os.path.getmtime(filepath)).isoformat(),
-                    }
+                key = _dossier_company_key(company_number, company_name)
+                return get_dossier_by_company(key)
     except Exception:
         pass
     raise HTTPException(status_code=404, detail="No dossier found for this lead")

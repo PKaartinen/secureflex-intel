@@ -249,7 +249,11 @@ export interface DossierPayload {
 export interface DossierResponse {
   company_name: string
   company_number?: string
+  company_key?: string
+  company_type?: string
+  region?: string
   generated_at: string
+  updated_at?: string
   dossier_markdown: string
   sources_used: string[]
   data_summary: {
@@ -263,6 +267,23 @@ export interface DossierResponse {
     has_website_analysis: boolean
   }
   saved_as?: string | null
+}
+
+export interface DossierListItem {
+  id: number
+  company_key: string
+  company_name: string
+  company_number: string | null
+  company_type: string | null
+  region: string | null
+  source_count: number
+  generated_at: string
+  updated_at: string
+}
+
+export interface DossierListResponse {
+  total: number
+  dossiers: DossierListItem[]
 }
 
 export interface ScanResponse {
@@ -384,5 +405,12 @@ export const api = {
 
   // Dossier
   generateDossier: (payload: DossierPayload) => post<DossierResponse>('/dossier/generate', payload),
-  getSavedDossier: (companyId: string) => get<{ company_id: string; company_name: string; dossier_markdown: string; generated_at: string }>(`/dossier/${companyId}`),
+  // Fetch persisted dossier by company number (or name slug prefixed with 'name_')
+  getDossierByCompany: (companyKey: string) =>
+    get<DossierResponse>(`/dossier/by-company/${encodeURIComponent(companyKey)}`)
+      .catch(() => null as DossierResponse | null),
+  listDossiers: () => get<DossierListResponse>('/dossier/list'),
+  // Legacy pipeline-lead-based lookup
+  getSavedDossier: (companyId: string) =>
+    get<DossierResponse>(`/dossier/${companyId}`).catch(() => null as DossierResponse | null),
 }

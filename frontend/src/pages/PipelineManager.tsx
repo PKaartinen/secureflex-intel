@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type Lead, type LeadCreatePayload, type LeadUpdatePayload } from '../lib/api'
 import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSpinner, EmptyState, ScoreBadge, StatusBadge, Table, Th, Td, Tr, Input } from '../components/ui'
@@ -803,9 +803,32 @@ export default function PipelineManager() {
 /** Generate Sales Intelligence Dossier for a pipeline lead */
 function LeadDossier({ lead }: { lead: Lead }) {
   const [dossier, setDossier] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null)
   const [sources, setSources] = useState<string[]>([])
+  const [loading, setLoading] = useState(false)
+  const [fetching, setFetching] = useState(true)
   const [error, setError] = useState('')
+
+  // Derive the company key the same way the backend does
+  const companyKey = lead.company_number?.trim()
+    ? lead.company_number.trim().toUpperCase()
+    : `name_${lead.company_name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '').slice(0, 80)}`
+
+  // Auto-fetch existing dossier when lead changes
+  useEffect(() => {
+    setDossier(null)
+    setGeneratedAt(null)
+    setSources([])
+    setError('')
+    setFetching(true)
+    api.getDossierByCompany(companyKey).then(result => {
+      if (result) {
+        setDossier(result.dossier_markdown)
+        setGeneratedAt(result.updated_at || result.generated_at)
+        setSources(result.sources_used || [])
+      }
+    }).finally(() => setFetching(false))
+  }, [companyKey])
 
   const generateDossier = async () => {
     setLoading(true)
@@ -821,6 +844,7 @@ function LeadDossier({ lead }: { lead: Lead }) {
         website_url: lead.website_url || '',
       })
       setDossier(result.dossier_markdown)
+      setGeneratedAt(result.updated_at || result.generated_at)
       setSources(result.sources_used)
     } catch (e: any) {
       setError(e.message || 'Failed to generate dossier')
@@ -829,22 +853,34 @@ function LeadDossier({ lead }: { lead: Lead }) {
     }
   }
 
+  const DOSSIER_STYLES = `
+    .prose h1 { font-size: 1rem; color: #f9fafb; margin-top: 0.5rem; }
+    .prose h2 { font-size: 0.9rem; color: #f9fafb; margin-top: 0.75rem; border-bottom: 1px solid #1f2937; padding-bottom: 0.25rem; }
+    .prose h3 { font-size: 0.8rem; color: #d1d5db; }
+    .prose strong { color: #f9fafb; }
+    .prose a { color: #3b82f6; }
+    .prose ul, .prose ol { padding-left: 1.2em; }
+    .prose li { margin: 0.15em 0; }
+    .prose blockquote { border-left: 2px solid #374151; padding-left: 0.75em; color: #9ca3af; }
+  `
+
   return (
     <div className="border-t pt-4" style={{ borderColor: '#1f2937' }}>
       <div className="flex items-center justify-between mb-2">
         <p className="text-xs uppercase tracking-wider" style={{ color: '#6b7280' }}>Sales Intelligence Dossier</p>
-        {dossier && (
-          <button
-            onClick={() => { setDossier(null); setSources([]) }}
-            className="text-xs px-1.5 py-0.5 rounded"
-            style={{ color: '#6b7280', background: 'rgba(255,255,255,0.05)' }}
-          >
-            Close
-          </button>
+        {dossier && generatedAt && (
+          <span className="text-xs" style={{ color: '#4b5563' }}>
+            Updated {new Date(generatedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+          </span>
         )}
       </div>
 
-      {dossier ? (
+      {fetching ? (
+        <div className="flex items-center justify-center py-4 gap-2" style={{ color: '#4b5563' }}>
+          <Loader2 size={14} className="animate-spin" />
+          <span className="text-xs">Checking for saved dossier...</span>
+        </div>
+      ) : dossier ? (
         <>
           {sources.length > 0 && (
             <div className="flex flex-wrap gap-1 mb-2">
@@ -857,16 +893,7 @@ function LeadDossier({ lead }: { lead: Lead }) {
           )}
           <div className="rounded-lg p-4 max-h-[500px] overflow-y-auto" style={{ background: '#0d1117', border: '1px solid #1f2937' }}>
             <div className="prose prose-invert prose-sm max-w-none" style={{ color: '#d1d5db', fontSize: '0.8rem', lineHeight: '1.5' }}>
-              <style>{`
-                .prose h1 { font-size: 1rem; color: #f9fafb; margin-top: 0.5rem; }
-                .prose h2 { font-size: 0.9rem; color: #f9fafb; margin-top: 0.75rem; border-bottom: 1px solid #1f2937; padding-bottom: 0.25rem; }
-                .prose h3 { font-size: 0.8rem; color: #d1d5db; }
-                .prose strong { color: #f9fafb; }
-                .prose a { color: #3b82f6; }
-                .prose ul, .prose ol { padding-left: 1.2em; }
-                .prose li { margin: 0.15em 0; }
-                .prose blockquote { border-left: 2px solid #374151; padding-left: 0.75em; color: #9ca3af; }
-              `}</style>
+              <style>{DOSSIER_STYLES}</style>
               <ReactMarkdown>{dossier}</ReactMarkdown>
             </div>
           </div>
@@ -874,14 +901,9 @@ function LeadDossier({ lead }: { lead: Lead }) {
             onClick={generateDossier}
             disabled={loading}
             className="flex items-center gap-2 justify-center py-2 rounded-lg text-xs font-medium w-full mt-2 transition-all"
-            style={{
-              background: 'rgba(59,130,246,0.1)',
-              color: '#3b82f6',
-              border: '1px solid rgba(59,130,246,0.2)',
-            }}
+            style={{ background: 'rgba(255,255,255,0.04)', color: '#6b7280', border: '1px solid #1f2937', opacity: loading ? 0.6 : 1 }}
           >
-            <Loader2 size={12} className={loading ? 'animate-spin' : 'hidden'} />
-            {loading ? 'Regenerating...' : 'Regenerate Dossier'}
+            {loading ? <><Loader2 size={12} className="animate-spin" />Regenerating...</> : <><BookOpen size={12} />Regenerate Dossier</>}
           </button>
         </>
       ) : (
@@ -898,15 +920,9 @@ function LeadDossier({ lead }: { lead: Lead }) {
             }}
           >
             {loading ? (
-              <>
-                <Loader2 size={14} className="animate-spin" />
-                Generating comprehensive dossier (15-30s)...
-              </>
+              <><Loader2 size={14} className="animate-spin" />Generating comprehensive dossier (15-30s)...</>
             ) : (
-              <>
-                <BookOpen size={14} />
-                Generate Sales Intelligence Dossier
-              </>
+              <><BookOpen size={14} />Generate Sales Intelligence Dossier</>
             )}
           </button>
           {error && <p className="text-xs mt-1 text-center" style={{ color: '#ef4444' }}>{error}</p>}
