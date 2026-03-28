@@ -935,14 +935,36 @@ def get_prospects_geojson(limit: int = 200):
 # ── Competitors Endpoints ────────────────────────────────────────────────────
 
 @app.get("/api/competitors")
-def get_competitors(limit: int = 100, offset: int = 0):
-    """Get competitor companies from latest scan."""
+def get_competitors(
+    limit: int = 100,
+    offset: int = 0,
+    acs_only: bool = False,
+):
+    """Get competitor companies from latest scan. Use acs_only=true to filter ACS-verified only."""
     # DB path
     try:
         from secureflex_intel.db import db_available, query_table, count_table, get_last_scan_time, competitors_table
         if db_available():
-            rows = query_table(competitors_table, order_by="scanned_at", limit=limit, offset=offset)
-            total = count_table(competitors_table)
+            filters = {}
+            if acs_only:
+                filters["acs_verified"] = True
+            if acs_only:
+                all_rows = query_table(competitors_table, filters=filters, order_by="scanned_at", limit=5000, offset=0)
+                total = len(all_rows)
+                rows = all_rows[offset:offset + limit]
+            else:
+                rows = query_table(competitors_table, order_by="scanned_at", limit=limit, offset=offset)
+                total = count_table(competitors_table)
+            # Parse service_categories JSON for frontend
+            for r in rows:
+                sc = r.get("service_categories")
+                if sc and isinstance(sc, str):
+                    try:
+                        r["service_categories_parsed"] = json.loads(sc)
+                    except Exception:
+                        r["service_categories_parsed"] = []
+                else:
+                    r["service_categories_parsed"] = []
             return {
                 "total": total,
                 "competitors": rows,
@@ -1533,6 +1555,211 @@ def get_crime_density_for_prospect(company_number: str):
         raise
     except Exception as e:
         print(f"[Crime] /crime/density error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Tier 1 Source Endpoints ─────────────────────────────────────────────────
+
+# -- SIA ACS Register --
+
+@app.post("/api/scan/acs")
+def trigger_acs_scan(
+    background_tasks: BackgroundTasks,
+    cross_ref_ch: bool = True,
+):
+    """Trigger a full SIA ACS Register scan (scrape + optional CH cross-ref)."""
+    def run_acs():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.sia_acs import run_scan as acs_scan
+        run_id = record_scan_start("acs")
+        try:
+            result = acs_scan(cross_ref_ch=cross_ref_ch)
+            record_scan_complete(run_id, result.get("contractors_written", 0))
+            print(f"[ACS] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[ACS] Scan error: {e}")
+
+    background_tasks.add_task(run_acs)
+    return {"status": "scan_started", "type": "acs", "cross_ref_ch": cross_ref_ch}
+
+
+@app.post("/api/scan/acs/csv")
+async def import_acs_csv(
+    background_tasks: BackgroundTasks,
+    cross_ref_ch: bool = False,
+):
+    """Import ACS roster from uploaded CSV content (fallback)."""
+    # Accept CSV as request body text
+    from starlette.requests import Request as StarletteRequest
+    # We'll accept JSON with a "csv_content" field
+    return {"status": "error", "detail": "Use POST /api/scan/acs/csv/upload with csv_content in JSON body"}
+
+
+@app.post("/api/scan/acs/csv/upload")
+async def import_acs_csv_upload(
+    background_tasks: BackgroundTasks,
+    payload: Dict[str, Any],
+):
+    """Import ACS roster from CSV content in JSON body {csv_content: '...', cross_ref_ch: false}."""
+    csv_content = payload.get("csv_content", "")
+    cross_ref_ch = payload.get("cross_ref_ch", False)
+    if not csv_content:
+        raise HTTPException(status_code=400, detail="csv_content is required")
+
+    def run_import():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.sia_acs import run_csv_import
+        run_id = record_scan_start("acs_csv")
+        try:
+            result = run_csv_import(csv_content, cross_ref_ch=cross_ref_ch)
+            record_scan_complete(run_id, result.get("contractors_written", 0))
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+
+    background_tasks.add_task(run_import)
+    return {"status": "import_started", "type": "acs_csv"}
+
+
+@app.get("/api/acs/stats")
+def get_acs_stats():
+    """Get ACS verification statistics for the competitors table."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, competitors_table
+        from sqlalchemy import select, func
+        if not db_available():
+            raise HTTPException(status_code=503, detail="Database not available")
+
+        engine = get_engine()
+        with engine.connect() as conn:
+            total = conn.execute(
+                select(func.count()).select_from(competitors_table)
+            ).scalar() or 0
+            acs_count = conn.execute(
+                select(func.count()).select_from(competitors_table)
+                .where(competitors_table.c.acs_verified == True)
+            ).scalar() or 0
+
+            # Category breakdown
+            acs_rows = conn.execute(
+                select(competitors_table.c.service_categories)
+                .where(competitors_table.c.acs_verified == True)
+            ).fetchall()
+
+            category_counts = {}
+            for row in acs_rows:
+                cats_json = row[0]
+                if cats_json:
+                    try:
+                        cats = json.loads(cats_json)
+                        for cat in cats:
+                            category_counts[cat] = category_counts.get(cat, 0) + 1
+                    except Exception:
+                        pass
+
+            # Average ACS score
+            avg_score = conn.execute(
+                select(func.avg(competitors_table.c.acs_score))
+                .where(competitors_table.c.acs_verified == True)
+            ).scalar() or 0
+
+        return {
+            "total_competitors": total,
+            "acs_verified": acs_count,
+            "non_acs": total - acs_count,
+            "acs_percentage": round(acs_count / total * 100, 1) if total else 0,
+            "category_breakdown": category_counts,
+            "average_acs_score": round(float(avg_score), 1),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -- The Gazette --
+
+@app.post("/api/scan/gazette")
+def trigger_gazette_scan(
+    background_tasks: BackgroundTasks,
+    days_back: int = 30,
+):
+    """Trigger a Gazette insolvency notice scan."""
+    def run_gazette():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.gazette import run_scan as gazette_scan
+        run_id = record_scan_start("gazette")
+        try:
+            result = gazette_scan(days_back=days_back)
+            record_scan_complete(run_id, result.get("signals_written", 0))
+            print(f"[Gazette] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Gazette] Scan error: {e}")
+
+    background_tasks.add_task(run_gazette)
+    return {"status": "scan_started", "type": "gazette", "days_back": days_back}
+
+
+@app.get("/api/gazette/notices")
+def get_gazette_notices(
+    days_back: int = 30,
+    limit: int = 50,
+):
+    """Get recent Gazette insolvency notices (live query, no DB required)."""
+    try:
+        from secureflex_intel.sources.gazette import GazetteClient
+        client = GazetteClient()
+        notices = client.search_insolvency_notices(days_back=days_back)
+        return {
+            "total": len(notices),
+            "notices": notices[:limit],
+            "days_back": days_back,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -- Companies House Events --
+
+@app.post("/api/scan/ch-events")
+def trigger_ch_events_scan(background_tasks: BackgroundTasks):
+    """Trigger a Companies House events scan for all watched companies."""
+    def run_ch_events():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.ch_streaming import run_scan as ch_events_scan
+        run_id = record_scan_start("ch_events")
+        try:
+            result = ch_events_scan()
+            record_scan_complete(run_id, result.get("signals_written", 0))
+            print(f"[CH Events] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[CH Events] Scan error: {e}")
+
+    background_tasks.add_task(run_ch_events)
+    return {"status": "scan_started", "type": "ch_events"}
+
+
+@app.get("/api/ch-events/{company_number}")
+def get_company_events(company_number: str):
+    """Get recent events for a specific company from Companies House."""
+    try:
+        from secureflex_intel.sources.ch_streaming import CHEventsClient, events_to_signals
+        client = CHEventsClient()
+        events = client.check_company_events(
+            company_number=company_number,
+            company_name=company_number,
+            is_competitor=False,
+        )
+        signals = events_to_signals(events)
+        return {
+            "company_number": company_number,
+            "events_found": len(events),
+            "events": events,
+            "signals": signals,
+        }
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 

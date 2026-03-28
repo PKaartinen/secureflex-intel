@@ -120,6 +120,11 @@ competitors_table = Table("competitors", metadata,
     Column("date_of_creation", String(50)),
     Column("website_url", Text),
     Column("scanned_at", DateTime, default=datetime.utcnow),
+    # ACS columns (Tier 1 — SIA Approved Contractor Scheme)
+    Column("sia_number", String(50), nullable=True),
+    Column("acs_verified", Boolean, default=False),
+    Column("service_categories", Text, nullable=True),   # JSON array
+    Column("acs_score", Integer, nullable=True),
 )
 
 signals_table = Table("signals", metadata,
@@ -209,6 +214,22 @@ def init_db():
                 "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'contracts_finder'"
             ))
         print("[DB] Migration: tenders.source column OK")
+
+        # Add ACS columns to competitors table
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE competitors ADD COLUMN IF NOT EXISTS sia_number VARCHAR(50)"
+            ))
+            conn.execute(text(
+                "ALTER TABLE competitors ADD COLUMN IF NOT EXISTS acs_verified BOOLEAN DEFAULT FALSE"
+            ))
+            conn.execute(text(
+                "ALTER TABLE competitors ADD COLUMN IF NOT EXISTS service_categories TEXT"
+            ))
+            conn.execute(text(
+                "ALTER TABLE competitors ADD COLUMN IF NOT EXISTS acs_score INTEGER"
+            ))
+        print("[DB] Migration: competitors ACS columns OK")
 
         return True
     except Exception as e:
