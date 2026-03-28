@@ -6,7 +6,7 @@ matching the exact same field names the CSV layer used so the API layer needs
 minimal changes.
 
 Tables:
-  tenders        — from contracts_finder scanner
+  tenders        — from contracts_finder and find_a_tender scanners
   prospects      — from companies_house clients scan
   competitors    — from companies_house competitors scan
   signals        — from signals scanner
@@ -91,6 +91,7 @@ tenders_table = Table("tenders", metadata,
     Column("score", Integer, default=0),
     Column("classification", String(50)),
     Column("scanned_at", DateTime, default=datetime.utcnow),
+    Column("source", String(50), default="contracts_finder"),
 )
 
 prospects_table = Table("prospects", metadata,
@@ -181,7 +182,7 @@ dossiers_table = Table("dossiers", metadata,
 )
 
 def init_db():
-    """Create all tables if they don't exist."""
+    """Create all tables if they don't exist, and run migrations."""
     engine = get_engine()
     if engine is None:
         print("[DB] No DATABASE_URL set — skipping DB init")
@@ -189,6 +190,15 @@ def init_db():
     try:
         metadata.create_all(engine)
         print("[DB] Tables created/verified OK")
+
+        # ── Migrations ───────────────────────────────────────────────────
+        # Add source column to tenders if it doesn't exist
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE tenders ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'contracts_finder'"
+            ))
+        print("[DB] Migration: tenders.source column OK")
+
         return True
     except Exception as e:
         print(f"[DB] Failed to create tables: {e}")

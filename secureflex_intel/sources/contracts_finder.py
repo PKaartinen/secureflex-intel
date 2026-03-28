@@ -2,9 +2,9 @@
 """
 SecureFlex Tender Radar — Automated UK Public Sector Tender Monitoring
 
-Monitors Contracts Finder OCDS API for security-related tenders in London and
-surrounding areas. Outputs scored opportunities to data/output/tenders/ and
-optionally adds high-scoring leads to the pipeline.
+Monitors Contracts Finder OCDS API for security-related tenders across the UK.
+Outputs scored opportunities to data/output/tenders/ and optionally adds
+high-scoring leads to the pipeline.
 
 Usage (via CLI):
     python -m secureflex_intel tenders
@@ -25,6 +25,11 @@ CPV Codes for Security:
     79714000 - Surveillance services
     79715000 - Patrol services
     85312310 - Key-holding services
+    50610000 - Security equipment maintenance
+    35120000 - Surveillance systems
+    79620000 - Supply of personnel (includes security staff)
+    90910000 - Cleaning (often bundled with security)
+    50700000 - Building maintenance
 """
 
 import csv
@@ -45,34 +50,50 @@ from secureflex_intel.config import settings
 
 CONTRACTS_FINDER_OCDS = "https://www.contractsfinder.service.gov.uk/Published/Notices/OCDS/Search"
 
-# CPV codes that indicate security-related tenders
+# CPV codes that indicate security-related tenders (expanded)
 SECURITY_CPV_PREFIXES = [
     "7971",    # 79710000–79719000 Security services family
     "853123",  # 85312310 Key-holding services
+    "50610",   # 50610000 Security equipment maintenance
+    "35120",   # 35120000 Surveillance systems
+    "79620",   # 79620000 Supply of personnel (includes security staff)
+    "90910",   # 90910000 Cleaning (often bundled with security)
+    "50700",   # 50700000 Building maintenance
 ]
 
-# Keywords for text-based matching (scored)
+# Keywords for text-based matching (scored) — expanded
 SECURITY_KEYWORDS = [
     "security guard", "manned guarding", "security services",
-    "door supervisor", "security officer", "patrol services",
-    "key holding", "alarm response", "concierge security",
-    "event security", "static guarding", "mobile patrol",
-    "security personnel", "close protection", "cctv monitoring",
-    "access control", "reception security", "corporate security",
-    "retail security", "loss prevention", "guarding",
-    "security staffing", "night security", "24/7 security",
+    "door supervisor", "door supervision", "security officer",
+    "patrol services", "key holding", "alarm response",
+    "concierge security", "event security", "static guarding",
+    "mobile patrol", "security personnel", "close protection",
+    "cctv monitoring", "access control", "reception security",
+    "corporate security", "retail security", "loss prevention",
+    "guarding", "security staffing", "night security", "24/7 security",
+    "site security", "concierge", "facilities management security",
 ]
 
-# Broad search terms to query the API with (cast a wide net)
+# Broad search terms to query the API with (cast a wide net) — expanded
 SEARCH_QUERIES = [
     "security guard",
     "manned guarding",
     "security services",
     "security officer",
     "door supervisor",
+    "door supervision",
     "patrol services",
     "guarding services",
     "CCTV monitoring",
+    "access control",
+    "key holding",
+    "mobile patrol",
+    "concierge",
+    "reception security",
+    "site security",
+    "event security",
+    "loss prevention",
+    "facilities management security",
 ]
 
 LONDON_REGIONS = [
@@ -319,6 +340,7 @@ def score_opportunity(parsed):
     breakdown["keyword_relevance"] = f"{keyword_score}/40 ({keyword_hits} kw + CPV:{cpv[:4] if cpv else 'none'})"
 
     # ── Location relevance (0-25 points) ─────────────────────────────────
+    # Search all UK but boost London/SE scores
     location_score = 0
     location_match = "None"
     region_lower = parsed.get("region", "").lower()
@@ -338,9 +360,13 @@ def score_opportunity(parsed):
     if location_score == 0 and ("england" in combined_loc or "nationwide" in combined_text):
         location_score = 8
         location_match = "England-wide"
-    if location_score == 0 and "uk" in combined_loc:
+    if location_score == 0 and ("uk" in combined_loc or "united kingdom" in combined_loc):
         location_score = 5
         location_match = "UK-wide"
+    # All other UK regions still get a base score
+    if location_score == 0 and region_lower:
+        location_score = 3
+        location_match = f"Other UK ({region_lower})"
 
     score += location_score
     breakdown["location"] = f"{location_score}/25 ({location_match})"
@@ -498,6 +524,7 @@ def save_tender_csv(opportunities, output_dir):
                     'score': int(opp.get('score', 0)),
                     'classification': opp.get('classification', ''),
                     'scanned_at': datetime.utcnow(),
+                    'source': 'contracts_finder',
                 })
             written = upsert_rows(tenders_table, db_rows, 'ocid')
             print(f'[DB] Upserted {written} tenders')
@@ -510,7 +537,7 @@ def save_tender_csv(opportunities, output_dir):
     fieldnames = [
         "classification", "score", "title", "buyer", "buyer_email",
         "region", "cpv_code", "value", "deadline", "sme_friendly",
-        "published_date", "link", "description_snippet", "ocid",
+        "published_date", "link", "description_snippet", "ocid", "source",
     ]
 
     with open(filepath, "w", newline="", encoding="utf-8") as f:
@@ -532,6 +559,7 @@ def save_tender_csv(opportunities, output_dir):
                 "link": opp.get("link", ""),
                 "description_snippet": opp.get("description_snippet", ""),
                 "ocid": opp.get("ocid", ""),
+                "source": "contracts_finder",
             })
 
     return filepath
@@ -607,6 +635,118 @@ def add_to_pipeline(opportunities, min_score=40):
     return added
 
 
+# ── Callable scan function for API use ───────────────────────────────────────
+
+def run_scan(days_back=None, add_to_pipeline_flag=False):
+    """
+    Run a Contracts Finder scan programmatically.
+    Returns list of opportunity dicts.
+    """
+    if days_back is None:
+        days_back = settings.tender_days_back
+
+    settings.ensure_dirs()
+    tenders_dir = str(settings.tenders_dir)
+
+    today = datetime.now()
+    from_date = (today - timedelta(days=days_back)).strftime("%Y-%m-%dT00:00:00Z")
+    to_date = today.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    print(f"[CF] Scanning Contracts Finder: {from_date[:10]} to {to_date[:10]}, {len(SEARCH_QUERIES)} queries")
+
+    # Search for each query term
+    all_releases = {}
+    for query in SEARCH_QUERIES:
+        print(f"  🔍 Searching for: '{query}'...")
+        releases = search_contracts_finder(
+            keyword=query,
+            published_from=from_date,
+            published_to=to_date,
+            stages="tender",
+            limit=100,
+            max_pages=3,
+        )
+
+        new_count = 0
+        for release in releases:
+            ocid = release.get("ocid", release.get("id", ""))
+            if ocid and ocid not in all_releases:
+                all_releases[ocid] = release
+                new_count += 1
+
+        print(f"    ✅ {len(releases)} results, {new_count} new ({len(all_releases)} unique total)")
+        time.sleep(1.5)
+
+    print(f"[CF] Total unique releases: {len(all_releases)}")
+
+    if not all_releases:
+        return []
+
+    # Parse and filter
+    opportunities = []
+    skipped = 0
+
+    for ocid, release in all_releases.items():
+        parsed = parse_ocds_release(release)
+
+        if not is_security_related(parsed):
+            skipped += 1
+            continue
+
+        score, breakdown = score_opportunity(parsed)
+        classification = classify_opportunity(score)
+
+        value = parsed.get("value", 0) or 0
+        value_display = f"£{value:,.0f}" if value else "Not specified"
+
+        deadline_display = ""
+        if parsed.get("deadline"):
+            try:
+                dt = datetime.fromisoformat(parsed["deadline"].replace("Z", "+00:00"))
+                deadline_display = dt.strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                deadline_display = parsed["deadline"][:10]
+
+        published_display = ""
+        if parsed.get("published_date"):
+            try:
+                dt = datetime.fromisoformat(parsed["published_date"].replace("Z", "+00:00"))
+                published_display = dt.strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                published_display = parsed["published_date"][:10]
+
+        description_snippet = parsed["description"][:200].replace("\n", " ").strip()
+        if len(parsed["description"]) > 200:
+            description_snippet += "..."
+
+        opportunities.append({
+            **parsed,
+            "score": score,
+            "score_breakdown": breakdown,
+            "classification": classification,
+            "value_display": value_display,
+            "deadline_display": deadline_display or "Not specified",
+            "published_display": published_display,
+            "description_snippet": description_snippet,
+            "source": "contracts_finder",
+        })
+
+    opportunities.sort(key=lambda x: x["score"], reverse=True)
+    print(f"[CF] {len(opportunities)} security-related tenders (skipped {skipped} non-security)")
+
+    # Save
+    if opportunities:
+        os.makedirs(tenders_dir, exist_ok=True)
+        save_tender_report(opportunities, tenders_dir)
+        save_tender_csv(opportunities, tenders_dir)
+
+        if add_to_pipeline_flag:
+            added = add_to_pipeline(opportunities, min_score=40)
+            print(f"[CF] Added {added} to pipeline")
+
+    return opportunities
+
+
 # ── Main Execution ───────────────────────────────────────────────────────────
 
 def main():
@@ -614,8 +754,8 @@ def main():
         description="SecureFlex Tender Radar — Monitor UK public sector security tenders"
     )
     parser.add_argument(
-        "--region", default="London",
-        help="Primary region to target (default: London)"
+        "--region", default="all",
+        help="Primary region to target (default: all UK)"
     )
     parser.add_argument(
         "--days-back", type=int, default=settings.tender_days_back,
@@ -756,6 +896,7 @@ def main():
             "deadline_display": deadline_display or "Not specified",
             "published_display": published_display,
             "description_snippet": description_snippet,
+            "source": "contracts_finder",
         })
 
     opportunities.sort(key=lambda x: x["score"], reverse=True)

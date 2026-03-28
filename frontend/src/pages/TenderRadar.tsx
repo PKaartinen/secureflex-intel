@@ -1,21 +1,45 @@
 import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import type { ScanSchedule } from '../lib/api'
 import { Card, CardHeader, CardTitle, CardContent, Button, PageHeader, LoadingSpinner, EmptyState, ScoreBadge, PriorityBadge, Table, Th, Td, Tr } from '../components/ui'
 import { formatDate, formatCurrency, formatRelativeTime } from '../lib/utils'
-import { FileText, Play, ExternalLink, BookOpen, PlusCircle, Sparkles, CheckCircle2, Loader2 } from 'lucide-react'
+import { FileText, Play, ExternalLink, BookOpen, PlusCircle, Sparkles, CheckCircle2, Loader2, Clock, RefreshCw } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+// ── Source badge component ──────────────────────────────────────────────────
+
+function SourceBadge({ source }: { source?: string }) {
+  const isFTS = source === 'fts'
+  return (
+    <span
+      className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium"
+      style={{
+        background: isFTS ? 'rgba(168,85,247,0.15)' : 'rgba(59,130,246,0.15)',
+        color: isFTS ? '#a855f7' : '#3b82f6',
+        border: `1px solid ${isFTS ? 'rgba(168,85,247,0.3)' : 'rgba(59,130,246,0.3)'}`,
+        fontSize: '0.6rem',
+        letterSpacing: '0.05em',
+      }}
+    >
+      {isFTS ? 'FTS' : 'CF'}
+    </span>
+  )
+}
+
+// ── Main component ──────────────────────────────────────────────────────────
 
 export default function TenderRadar() {
   const queryClient = useQueryClient()
   const [minScore, setMinScore] = useState(0)
+  const [sourceFilter, setSourceFilter] = useState<string>('')
   const [showReport, setShowReport] = useState(false)
   const [selectedTender, setSelectedTender] = useState<Record<string, string | number | boolean | null | undefined> | null>(null)
 
   const { data: tenders, isLoading } = useQuery({
-    queryKey: ['tenders', minScore],
-    queryFn: () => api.tenders({ min_score: minScore }),
+    queryKey: ['tenders', minScore, sourceFilter],
+    queryFn: () => api.tenders({ min_score: minScore, source: sourceFilter || undefined }),
     refetchInterval: 60_000,
   })
 
@@ -25,15 +49,36 @@ export default function TenderRadar() {
     enabled: showReport,
   })
 
-  const scan = useMutation({
+  const { data: schedule } = useQuery({
+    queryKey: ['scan-schedule'],
+    queryFn: api.scanSchedule,
+    refetchInterval: 30_000,
+  })
+
+  const scanCF = useMutation({
     mutationFn: () => api.scanTenders(30),
     onSuccess: () => {
       setTimeout(() => queryClient.invalidateQueries({ queryKey: ['tenders'] }), 3000)
     },
   })
 
-  const hotCount = (tenders?.tenders || []).filter(t => String(t.classification).includes('HOT')).length
-  const warmCount = (tenders?.tenders || []).filter(t => String(t.classification).includes('WARM')).length
+  const scanFTS = useMutation({
+    mutationFn: () => api.scanFTS(),
+    onSuccess: () => {
+      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['tenders'] }), 3000)
+    },
+  })
+
+  const toggleSchedule = useMutation({
+    mutationFn: (payload: { enabled: boolean; interval_hours?: number }) => api.toggleScanSchedule(payload),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['scan-schedule'] }),
+  })
+
+  const allTenders = tenders?.tenders || []
+  const hotCount = allTenders.filter(t => String(t.classification).includes('HOT')).length
+  const warmCount = allTenders.filter(t => String(t.classification).includes('WARM')).length
+  const cfCount = allTenders.filter(t => (t.source || 'contracts_finder') === 'contracts_finder').length
+  const ftsCount = allTenders.filter(t => t.source === 'fts').length
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -46,9 +91,21 @@ export default function TenderRadar() {
               <BookOpen size={12} />
               {showReport ? 'Hide Report' : 'View Report'}
             </Button>
-            <Button size="sm" variant="primary" loading={scan.isPending} onClick={() => scan.mutate()}>
+            <Button size="sm" variant="ghost" loading={scanCF.isPending} onClick={() => scanCF.mutate()}>
               <Play size={12} />
-              Run Scan
+              Scan CF
+            </Button>
+            <Button size="sm" variant="ghost" loading={scanFTS.isPending} onClick={() => scanFTS.mutate()}>
+              <Play size={12} />
+              Scan FTS
+            </Button>
+            <Button
+              size="sm"
+              variant={schedule?.enabled ? 'primary' : 'ghost'}
+              onClick={() => toggleSchedule.mutate({ enabled: !schedule?.enabled })}
+            >
+              <Clock size={12} />
+              Auto {schedule?.enabled ? 'ON' : 'OFF'}
             </Button>
           </>
         }
@@ -58,38 +115,88 @@ export default function TenderRadar() {
         {/* Left: table list */}
         <div className="flex-1 flex flex-col overflow-hidden p-6 space-y-4">
           {/* Stats row */}
-          <div className="grid grid-cols-3 gap-4 flex-shrink-0">
-            <div className="rounded-xl p-4 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
-              <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Hot Tenders</p>
+          <div className="grid grid-cols-5 gap-3 flex-shrink-0">
+            <div className="rounded-xl p-3 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
+              <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Hot</p>
               <p className="text-2xl font-bold" style={{ color: '#ef4444' }}>{hotCount}</p>
             </div>
-            <div className="rounded-xl p-4 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
-              <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Warm Tenders</p>
+            <div className="rounded-xl p-3 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
+              <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Warm</p>
               <p className="text-2xl font-bold" style={{ color: '#f59e0b' }}>{warmCount}</p>
             </div>
-            <div className="rounded-xl p-4 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
-              <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Total Found</p>
+            <div className="rounded-xl p-3 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
+              <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Total</p>
               <p className="text-2xl font-bold" style={{ color: '#f9fafb' }}>{tenders?.total || 0}</p>
+            </div>
+            <div className="rounded-xl p-3 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
+              <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#3b82f6' }}>Contracts Finder</p>
+              <p className="text-2xl font-bold" style={{ color: '#3b82f6' }}>{cfCount}</p>
+            </div>
+            <div className="rounded-xl p-3 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
+              <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#a855f7' }}>Find a Tender</p>
+              <p className="text-2xl font-bold" style={{ color: '#a855f7' }}>{ftsCount}</p>
             </div>
           </div>
 
+          {/* Auto-scan status bar */}
+          {schedule?.enabled && (
+            <div
+              className="flex items-center gap-3 px-4 py-2 rounded-lg text-xs"
+              style={{ background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.2)', color: '#22c55e' }}
+            >
+              <RefreshCw size={12} className={schedule.running ? 'animate-spin' : ''} />
+              <span>
+                Auto-scan {schedule.running ? 'running now...' : `every ${schedule.interval_hours}h`}
+                {schedule.next_run && !schedule.running && (
+                  <> · Next: {formatRelativeTime(schedule.next_run)}</>
+                )}
+                {schedule.last_run && (
+                  <> · Last: {formatRelativeTime(schedule.last_run)}</>
+                )}
+              </span>
+            </div>
+          )}
+
           {/* Filters */}
-          <div className="flex items-center gap-3 flex-shrink-0">
-            <span className="text-xs" style={{ color: '#6b7280' }}>Min Score:</span>
-            {[0, 20, 40, 60, 80].map(s => (
-              <button
-                key={s}
-                onClick={() => setMinScore(s)}
-                className="px-3 py-1 rounded-full text-xs transition-all"
-                style={{
-                  background: minScore === s ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.05)',
-                  border: `1px solid ${minScore === s ? 'rgba(59,130,246,0.4)' : '#374151'}`,
-                  color: minScore === s ? '#3b82f6' : '#9ca3af',
-                }}
-              >
-                {s === 0 ? 'All' : `${s}+`}
-              </button>
-            ))}
+          <div className="flex items-center gap-4 flex-shrink-0 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="text-xs" style={{ color: '#6b7280' }}>Min Score:</span>
+              {[0, 20, 40, 60, 80].map(s => (
+                <button
+                  key={s}
+                  onClick={() => setMinScore(s)}
+                  className="px-3 py-1 rounded-full text-xs transition-all"
+                  style={{
+                    background: minScore === s ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.05)',
+                    border: `1px solid ${minScore === s ? 'rgba(59,130,246,0.4)' : '#374151'}`,
+                    color: minScore === s ? '#3b82f6' : '#9ca3af',
+                  }}
+                >
+                  {s === 0 ? 'All' : `${s}+`}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs" style={{ color: '#6b7280' }}>Source:</span>
+              {[
+                { value: '', label: 'All' },
+                { value: 'contracts_finder', label: 'CF' },
+                { value: 'fts', label: 'FTS' },
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setSourceFilter(opt.value)}
+                  className="px-3 py-1 rounded-full text-xs transition-all"
+                  style={{
+                    background: sourceFilter === opt.value ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.05)',
+                    border: `1px solid ${sourceFilter === opt.value ? 'rgba(59,130,246,0.4)' : '#374151'}`,
+                    color: sourceFilter === opt.value ? '#3b82f6' : '#9ca3af',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Report view */}
@@ -119,12 +226,12 @@ export default function TenderRadar() {
           <Card className="flex-1 overflow-hidden flex flex-col">
             <CardHeader className="flex-shrink-0">
               <CardTitle>Tender Opportunities</CardTitle>
-              <span className="text-xs" style={{ color: '#6b7280' }}>{tenders?.tenders.length || 0} results · click row to view details</span>
+              <span className="text-xs" style={{ color: '#6b7280' }}>{allTenders.length} results · click row to view details</span>
             </CardHeader>
             <div className="flex-1 overflow-y-auto">
               {isLoading ? (
                 <LoadingSpinner />
-              ) : !tenders?.tenders.length ? (
+              ) : !allTenders.length ? (
                 <EmptyState
                   icon={<FileText size={32} />}
                   title="No tenders found"
@@ -134,6 +241,7 @@ export default function TenderRadar() {
                 <Table>
                   <thead>
                     <tr>
+                      <Th>Source</Th>
                       <Th>Classification</Th>
                       <Th>Title</Th>
                       <Th>Buyer</Th>
@@ -144,12 +252,13 @@ export default function TenderRadar() {
                     </tr>
                   </thead>
                   <tbody>
-                    {tenders.tenders.map((tender, i) => (
+                    {allTenders.map((tender, i) => (
                       <Tr
                         key={i}
                         onClick={() => setSelectedTender(tender as unknown as Record<string, string | number | boolean | null | undefined>)}
                         style={selectedTender === (tender as unknown) ? { background: 'rgba(59,130,246,0.08)' } : {}}
                       >
+                        <Td><SourceBadge source={tender.source} /></Td>
                         <Td>
                           <PriorityBadge priority={
                             String(tender.classification).includes('HOT') ? 'hot' :
@@ -158,9 +267,9 @@ export default function TenderRadar() {
                         </Td>
                         <Td>
                           <div>
-                            <p className="text-sm" style={{ color: '#f9fafb', maxWidth: 260 }}>{tender.title}</p>
+                            <p className="text-sm" style={{ color: '#f9fafb', maxWidth: 240 }}>{tender.title}</p>
                             {tender.description_snippet && (
-                              <p className="text-xs mt-0.5 truncate" style={{ color: '#6b7280', maxWidth: 260 }}>
+                              <p className="text-xs mt-0.5 truncate" style={{ color: '#6b7280', maxWidth: 240 }}>
                                 {tender.description_snippet}
                               </p>
                             )}
@@ -209,7 +318,8 @@ export default function TenderRadar() {
               {/* Detail header */}
               <div className="flex items-start justify-between px-5 py-4 border-b flex-shrink-0" style={{ borderColor: '#1f2937' }}>
                 <div className="flex-1 min-w-0 pr-3">
-                  <div className="mb-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <SourceBadge source={selectedTender.source as string | undefined} />
                     <PriorityBadge priority={
                       String(selectedTender.classification).includes('HOT') ? 'hot' :
                       String(selectedTender.classification).includes('WARM') ? 'warm' : 'low'
@@ -224,7 +334,7 @@ export default function TenderRadar() {
                   className="flex-shrink-0 text-xs px-2 py-1 rounded"
                   style={{ color: '#6b7280', background: 'rgba(255,255,255,0.05)' }}
                 >
-                  ✕
+                  Close
                 </button>
               </div>
 
@@ -247,7 +357,7 @@ export default function TenderRadar() {
                   <div className="rounded-lg p-3" style={{ background: '#111827', border: '1px solid #1f2937' }}>
                     <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>SME Friendly</p>
                     <p className="text-sm" style={{ color: String(selectedTender.sme_friendly) === 'true' ? '#22c55e' : '#6b7280' }}>
-                      {String(selectedTender.sme_friendly) === 'true' ? '✅ Yes' : '❌ No'}
+                      {String(selectedTender.sme_friendly) === 'true' ? 'Yes' : 'No'}
                     </p>
                   </div>
                 </div>
@@ -277,6 +387,7 @@ export default function TenderRadar() {
                 {/* Meta */}
                 <div className="space-y-2">
                   {[
+                    ['Source', (selectedTender.source || 'contracts_finder') === 'fts' ? 'Find a Tender Service' : 'Contracts Finder'],
                     ['CPV Code', selectedTender.cpv_code],
                     ['Published', selectedTender.published_date ? formatDate(String(selectedTender.published_date)) : null],
                   ].filter(([, v]) => v).map(([k, v]) => (
@@ -306,7 +417,7 @@ export default function TenderRadar() {
                       style={{ background: 'rgba(59,130,246,0.15)', color: '#3b82f6', border: '1px solid rgba(59,130,246,0.3)' }}
                     >
                       <ExternalLink size={14} />
-                      View on Contracts Finder
+                      {(selectedTender.source || 'contracts_finder') === 'fts' ? 'View on Find a Tender' : 'View on Contracts Finder'}
                     </a>
                   )}
                 </div>
@@ -468,14 +579,17 @@ function AddTenderToPipeline({ tender }: { tender: Record<string, string | numbe
   const [added, setAdded] = useState(false)
   const [error, setError] = useState('')
 
+  const sourceName = (tender.source || 'contracts_finder') === 'fts' ? 'FTS' : 'CF'
+
   const mutation = useMutation({
     mutationFn: () => api.createLead({
       company_name: String(tender.buyer || 'Unknown Buyer'),
       company_type: 'Tender Lead',
       region: String(tender.region || ''),
-      source: `Tender: ${String(tender.title || '').slice(0, 80)}`,
-      notes: `Tender score: ${tender.score || 'N/A'}/100 | Classification: ${tender.classification || 'N/A'} | Value: ${tender.value || 'N/A'} | Deadline: ${tender.deadline || 'N/A'} | Link: ${tender.link || 'N/A'}`,
-      status: 'Not Contacted',
+      source: `${sourceName} Tender: ${String(tender.title || '').slice(0, 80)}`,
+      notes: `Tender score: ${tender.score || 'N/A'}/100 | Classification: ${tender.classification || 'N/A'} | Value: ${tender.value || 'N/A'} | Deadline: ${tender.deadline || 'N/A'} | Source: ${sourceName}`,
+      status: 'prospect',
+      tier: String(tender.classification).includes('HOT') ? '1' : String(tender.classification).includes('WARM') ? '2' : '3',
       next_action: 'Review tender and prepare bid response',
       website_url: String(tender.link || ''),
     }),

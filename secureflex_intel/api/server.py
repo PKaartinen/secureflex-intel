@@ -15,6 +15,8 @@ import json
 import os
 import sys
 import time
+import asyncio
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -49,7 +51,93 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── DB init on startup ────────────────────────────────────────────────────────
+# ── Auto-Scan Scheduler State ────────────────────────────────────────────────
+
+_scheduler_state = {
+    "enabled": False,
+    "interval_hours": 6,
+    "last_run": None,
+    "next_run": None,
+    "running": False,
+    "thread": None,
+}
+
+
+def _run_scheduled_scans():
+    """Run all tender scans (CF + FTS) as a scheduled task."""
+    _scheduler_state["running"] = True
+    _scheduler_state["last_run"] = datetime.utcnow().isoformat()
+    print("[Scheduler] Starting scheduled scan...")
+    try:
+        # Run Contracts Finder scan
+        from secureflex_intel.sources.contracts_finder import run_scan as cf_scan
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        run_id = record_scan_start("tenders")
+        try:
+            results = cf_scan(days_back=settings.tender_days_back)
+            record_scan_complete(run_id, len(results))
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Scheduler] CF scan error: {e}")
+
+        # Run FTS scan
+        from secureflex_intel.sources.find_a_tender import run_scan as fts_scan
+        run_id = record_scan_start("fts")
+        try:
+            results = fts_scan(days_back=settings.fts_days_back)
+            record_scan_complete(run_id, len(results))
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Scheduler] FTS scan error: {e}")
+
+        print("[Scheduler] Scheduled scan complete")
+    except Exception as e:
+        print(f"[Scheduler] Error: {e}")
+    finally:
+        _scheduler_state["running"] = False
+
+
+def _scheduler_loop():
+    """Background thread that runs scans at the configured interval."""
+    while _scheduler_state["enabled"]:
+        interval = _scheduler_state["interval_hours"] * 3600
+        _scheduler_state["next_run"] = (
+            datetime.utcnow() + timedelta(seconds=interval)
+        ).isoformat()
+
+        # Sleep in small increments so we can stop quickly
+        for _ in range(interval):
+            if not _scheduler_state["enabled"]:
+                return
+            time.sleep(1)
+
+        if _scheduler_state["enabled"] and not _scheduler_state["running"]:
+            _run_scheduled_scans()
+
+
+def _start_scheduler():
+    """Start the background scheduler thread."""
+    if _scheduler_state["thread"] and _scheduler_state["thread"].is_alive():
+        return  # Already running
+    _scheduler_state["enabled"] = True
+    _scheduler_state["interval_hours"] = settings.scan_interval_hours
+    _scheduler_state["next_run"] = (
+        datetime.utcnow() + timedelta(hours=settings.scan_interval_hours)
+    ).isoformat()
+    t = threading.Thread(target=_scheduler_loop, daemon=True, name="scan-scheduler")
+    t.start()
+    _scheduler_state["thread"] = t
+    print(f"[Scheduler] Started — interval: {settings.scan_interval_hours}h")
+
+
+def _stop_scheduler():
+    """Stop the background scheduler."""
+    _scheduler_state["enabled"] = False
+    _scheduler_state["next_run"] = None
+    print("[Scheduler] Stopped")
+
+
+# ── DB init + auto-scan on startup ───────────────────────────────────────────
 
 @app.on_event("startup")
 def startup_event():
@@ -59,6 +147,10 @@ def startup_event():
         init_db()
     except Exception as e:
         print(f"[DB] Startup init failed (non-fatal): {e}")
+
+    # Start auto-scan scheduler if configured
+    if settings.auto_scan:
+        _start_scheduler()
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -289,26 +381,25 @@ def get_pipeline(
             rows = query_table(pipeline_table, filters=filters, order_by=sort_by, limit=limit)
             if company_type:
                 rows = [r for r in rows if company_type.lower() in (r.get("company_type") or "").lower()]
-            total = count_table(pipeline_table)
-            return {"total": total, "leads": rows}
+            return {"total": len(rows), "leads": rows, "source": "database"}
     except Exception:
         pass
     # CSV fallback
     pipeline_path = str(settings.pipeline_path)
     rows = read_csv_as_dicts(pipeline_path)
     if status:
-        rows = [r for r in rows if status.lower() in r.get("status", "").lower()]
+        rows = [r for r in rows if r.get("status", "").lower() == status.lower()]
     if tier:
-        rows = [r for r in rows if r.get("tier") == tier]
+        rows = [r for r in rows if r.get("tier", "") == tier]
     if company_type:
         rows = [r for r in rows if company_type.lower() in r.get("company_type", "").lower()]
-    rows.sort(key=lambda r: r.get(sort_by, ""), reverse=True)
+    rows.sort(key=lambda r: r.get("last_modified", ""), reverse=True)
     return {"total": len(rows), "leads": rows[:limit]}
 
 
 @app.get("/api/pipeline/{company_id}")
-def get_lead(company_id: str):
-    """Get a single lead by company ID."""
+def get_pipeline_lead(company_id: str):
+    """Get a single pipeline lead by company_id."""
     try:
         from secureflex_intel.db import db_available, query_table, pipeline_table
         if db_available():
@@ -319,185 +410,135 @@ def get_lead(company_id: str):
         pass
     pipeline_path = str(settings.pipeline_path)
     rows = read_csv_as_dicts(pipeline_path)
-    for row in rows:
-        if row.get("company_id") == company_id:
-            return row
-    raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
-
-
-from pydantic import BaseModel
-from typing import Optional as Opt
-
-class LeadCreate(BaseModel):
-    company_name: str
-    company_type: str = ""
-    company_number: str = ""
-    sic_codes: str = ""
-    region: str = ""
-    address: str = ""
-    website_url: str = ""
-    source: str = ""
-    status: str = "Not Contacted"
-    tier: str = ""
-    notes: str = ""
-    next_action: str = ""
-    next_action_date: str = ""
-
-class LeadUpdate(BaseModel):
-    company_name: Opt[str] = None
-    company_type: Opt[str] = None
-    company_number: Opt[str] = None
-    sic_codes: Opt[str] = None
-    region: Opt[str] = None
-    address: Opt[str] = None
-    website_url: Opt[str] = None
-    source: Opt[str] = None
-    status: Opt[str] = None
-    tier: Opt[str] = None
-    notes: Opt[str] = None
-    next_action: Opt[str] = None
-    next_action_date: Opt[str] = None
-
-
-def _generate_company_id() -> str:
-    """Generate the next SEC-XXXX company ID."""
-    try:
-        from secureflex_intel.db import db_available, get_engine, pipeline_table
-        from sqlalchemy import select, func
-        if db_available():
-            engine = get_engine()
-            with engine.connect() as conn:
-                result = conn.execute(select(func.count()).select_from(pipeline_table)).scalar() or 0
-                return f"SEC-{result + 1:04d}"
-    except Exception:
-        pass
-    return f"SEC-{int(time.time()) % 10000:04d}"
+    for r in rows:
+        if r.get("company_id") == company_id:
+            return r
+    raise HTTPException(status_code=404, detail="Lead not found")
 
 
 @app.post("/api/pipeline")
-def create_lead(lead: LeadCreate):
+def create_pipeline_lead(payload: Dict[str, Any]):
     """Create a new pipeline lead."""
+    company_name = payload.get("company_name", "").strip()
+    if not company_name:
+        raise HTTPException(status_code=400, detail="company_name is required")
+
     try:
-        from secureflex_intel.db import db_available, upsert_rows, pipeline_table
+        from secureflex_intel.db import db_available, get_engine, pipeline_table, count_table
+        from sqlalchemy import insert as sa_insert
         if db_available():
-            company_id = _generate_company_id()
+            engine = get_engine()
+            total = count_table(pipeline_table)
+            company_id = f"SEC-{total + 1:04d}"
             row = {
                 "company_id": company_id,
-                "company_name": lead.company_name,
-                "company_type": lead.company_type,
-                "company_number": lead.company_number,
-                "sic_codes": lead.sic_codes,
-                "region": lead.region,
-                "address": lead.address,
-                "website_url": lead.website_url,
-                "source": lead.source,
-                "status": lead.status or "Not Contacted",
-                "tier": lead.tier,
-                "notes": lead.notes,
-                "next_action": lead.next_action,
-                "next_action_date": lead.next_action_date,
+                "company_name": company_name,
+                "company_number": payload.get("company_number", ""),
+                "company_type": payload.get("company_type", ""),
+                "sic_codes": payload.get("sic_codes", ""),
+                "status": payload.get("status", "prospect"),
+                "tier": payload.get("tier", "3"),
+                "region": payload.get("region", ""),
+                "address": payload.get("address", ""),
+                "website_url": payload.get("website_url", ""),
+                "source": payload.get("source", "Manual"),
+                "notes": payload.get("notes", ""),
+                "next_action": payload.get("next_action", ""),
+                "next_action_date": payload.get("next_action_date", ""),
+                "last_modified": datetime.utcnow(),
+                "created_at": datetime.utcnow(),
             }
-            written = upsert_rows(pipeline_table, [row], "company_id")
-            if written:
-                return {"status": "created", "company_id": company_id, "lead": row}
-            raise HTTPException(status_code=500, detail="Failed to write lead")
-    except HTTPException:
-        raise
+            with engine.begin() as conn:
+                conn.execute(sa_insert(pipeline_table).values(**row))
+            return {"status": "created", "company_id": company_id, "lead": row}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.put("/api/pipeline/{company_id}")
-def update_lead(company_id: str, updates: LeadUpdate):
+def update_pipeline_lead(company_id: str, payload: Dict[str, Any]):
     """Update an existing pipeline lead."""
     try:
         from secureflex_intel.db import db_available, get_engine, pipeline_table
-        from sqlalchemy import update as sql_update
+        from sqlalchemy import update as sa_update
         if db_available():
             engine = get_engine()
-            update_data = {k: v for k, v in updates.dict().items() if v is not None}
-            if not update_data:
-                raise HTTPException(status_code=400, detail="No fields to update")
-            update_data["last_modified"] = datetime.utcnow()
+            payload["last_modified"] = datetime.utcnow()
+            valid_cols = {c.name for c in pipeline_table.columns}
+            clean = {k: v for k, v in payload.items() if k in valid_cols}
             with engine.begin() as conn:
-                result = conn.execute(
-                    sql_update(pipeline_table)
+                conn.execute(
+                    sa_update(pipeline_table)
                     .where(pipeline_table.c.company_id == company_id)
-                    .values(**update_data)
+                    .values(**clean)
                 )
-                if result.rowcount == 0:
-                    raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
-            return {"status": "updated", "company_id": company_id, "updated_fields": list(update_data.keys())}
-    except HTTPException:
-        raise
+            return {"status": "updated", "company_id": company_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/api/pipeline/{company_id}")
-def delete_lead(company_id: str):
+def delete_pipeline_lead(company_id: str):
     """Delete a pipeline lead."""
     try:
         from secureflex_intel.db import db_available, get_engine, pipeline_table
-        from sqlalchemy import delete as sql_delete
+        from sqlalchemy import delete as sa_delete
         if db_available():
             engine = get_engine()
             with engine.begin() as conn:
-                result = conn.execute(
-                    sql_delete(pipeline_table)
+                conn.execute(
+                    sa_delete(pipeline_table)
                     .where(pipeline_table.c.company_id == company_id)
                 )
-                if result.rowcount == 0:
-                    raise HTTPException(status_code=404, detail=f"Lead {company_id} not found")
             return {"status": "deleted", "company_id": company_id}
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── AI Analysis Endpoints ───────────────────────────────────────────────────
+# ── AI Endpoints ─────────────────────────────────────────────────────────────
 
 @app.get("/api/ai/status")
-def get_ai_status():
-    """Check if AI features are available."""
-    try:
-        from secureflex_intel.ai import ai_available
-        return {"available": ai_available()}
-    except Exception:
-        return {"available": False}
-
+def ai_status():
+    """Check if AI (Anthropic) is available."""
+    return {"available": bool(settings.anthropic_api_key)}
 
 
 @app.post("/api/ai/analyze/tender")
-def analyze_tender(tender: Dict[str, Any]):
-    """Generate AI analysis for a tender opportunity."""
-    from secureflex_intel.ai import generate_tender_analysis
-    analysis = generate_tender_analysis(tender)
-    return {"analysis": analysis}
+def ai_analyze_tender(payload: Dict[str, Any]):
+    """AI analysis of a tender opportunity."""
+    try:
+        from secureflex_intel.ai import analyze_tender
+        analysis = analyze_tender(payload)
+        return {"analysis": analysis}
+    except Exception as e:
+        return {"analysis": f"AI analysis unavailable: {e}"}
 
 
 @app.post("/api/ai/analyze/prospect")
-def analyze_prospect(prospect: Dict[str, Any]):
-    """Generate AI analysis for a prospect."""
-    from secureflex_intel.ai import generate_prospect_analysis
-    analysis = generate_prospect_analysis(prospect)
-    return {"analysis": analysis}
+def ai_analyze_prospect(payload: Dict[str, Any]):
+    """AI analysis of a prospect company."""
+    try:
+        from secureflex_intel.ai import analyze_prospect
+        analysis = analyze_prospect(payload)
+        return {"analysis": analysis}
+    except Exception as e:
+        return {"analysis": f"AI analysis unavailable: {e}"}
 
 
-# ── Dossier Endpoints ───────────────────────────────────────────────────────
+# ── Dossier Endpoints ────────────────────────────────────────────────────────
 
 def _dossier_company_key(company_number: str, company_name: str) -> str:
-    """Derive a stable lookup key: company number if available, else slugified name."""
-    if company_number and company_number.strip():
-        return company_number.strip().upper()
-    safe = company_name.lower().strip().replace(" ", "_")
-    import re as _re
-    safe = _re.sub(r"[^a-z0-9_]", "", safe)[:80]
-    return f"name_{safe}"
+    """Derive a stable company key for dossier lookups."""
+    if company_number:
+        return company_number.upper().strip()
+    if company_name:
+        import re
+        slug = re.sub(r'[^a-z0-9]+', '_', company_name.lower().strip())
+        return f"name_{slug[:80]}"
+    return "unknown"
 
 
-def _save_dossier_to_db(result: Dict[str, Any], company_number: str, company_type: str, region: str):
+def _save_dossier_to_db(result: dict, company_number: str, company_type: str, region: str):
     """Upsert a generated dossier into the dossiers table."""
     try:
         from secureflex_intel.db import db_available, get_engine, dossiers_table
@@ -684,8 +725,9 @@ def get_tenders(
     classification: Optional[str] = None,
     min_score: int = 0,
     region: Optional[str] = None,
+    source: Optional[str] = None,
 ):
-    """Get latest tender scan results."""
+    """Get latest tender scan results with optional source filter."""
     # DB path
     try:
         from secureflex_intel.db import db_available, query_table, count_table, get_last_scan_time, tenders_table
@@ -697,6 +739,8 @@ def get_tenders(
                 rows = [r for r in rows if int(r.get("score") or 0) >= min_score]
             if region:
                 rows = [r for r in rows if region.lower() in (r.get("region") or "").lower()]
+            if source:
+                rows = [r for r in rows if (r.get("source") or "contracts_finder") == source]
             return {
                 "total": len(rows),
                 "tenders": rows,
@@ -717,6 +761,8 @@ def get_tenders(
         rows = [r for r in rows if int(r.get("score", 0)) >= min_score]
     if region:
         rows = [r for r in rows if region.lower() in r.get("region", "").lower()]
+    if source:
+        rows = [r for r in rows if r.get("source", "contracts_finder") == source]
     last_modified = datetime.fromtimestamp(os.path.getmtime(latest_csv)).isoformat()
     return {"total": len(rows), "tenders": rows, "last_scan": last_modified, "source_file": os.path.basename(latest_csv)}
 
@@ -769,6 +815,7 @@ def get_tenders_geojson():
                 "deadline": row.get("deadline", ""),
                 "buyer_email": row.get("buyer_email", ""),
                 "link": row.get("link", ""),
+                "source": row.get("source", "contracts_finder"),
                 "marker_type": "tender",
                 "marker_color": _score_to_color(int(row.get("score") or 0)),
             },
@@ -1048,7 +1095,6 @@ def get_signals_report():
     }
 
 
-
 # ── Map Data (Combined GeoJSON) ─────────────────────────────────────────────
 
 @app.get("/api/map/all")
@@ -1246,6 +1292,24 @@ def trigger_tender_scan(
     return {"status": "scan_started", "type": "tenders", "days_back": days_back}
 
 
+@app.post("/api/scan/fts")
+def trigger_fts_scan(background_tasks: BackgroundTasks):
+    """Trigger a new Find a Tender Service scan in the background."""
+    def run_scan():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.find_a_tender import run_scan as fts_scan
+        run_id = record_scan_start("fts")
+        try:
+            results = fts_scan(days_back=settings.fts_days_back)
+            record_scan_complete(run_id, len(results))
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[FTS] Scan error: {e}")
+
+    background_tasks.add_task(run_scan)
+    return {"status": "scan_started", "type": "fts", "days_back": settings.fts_days_back}
+
+
 @app.post("/api/scan/prospects")
 def trigger_prospect_scan(
     background_tasks: BackgroundTasks,
@@ -1299,6 +1363,46 @@ def trigger_competitor_scan(
 
     background_tasks.add_task(run_scan)
     return {"status": "scan_started", "type": "competitors", "region": region}
+
+
+# ── Scan Schedule Endpoints ──────────────────────────────────────────────────
+
+@app.get("/api/scan/schedule")
+def get_scan_schedule():
+    """Get the current auto-scan schedule status."""
+    return {
+        "enabled": _scheduler_state["enabled"],
+        "interval_hours": _scheduler_state["interval_hours"],
+        "last_run": _scheduler_state["last_run"],
+        "next_run": _scheduler_state["next_run"],
+        "running": _scheduler_state["running"],
+    }
+
+
+@app.post("/api/scan/schedule")
+def toggle_scan_schedule(payload: Dict[str, Any] = None):
+    """Toggle auto-scan on/off. Optionally set interval_hours."""
+    if payload is None:
+        payload = {}
+
+    # Toggle
+    if "enabled" in payload:
+        if payload["enabled"]:
+            if "interval_hours" in payload:
+                _scheduler_state["interval_hours"] = int(payload["interval_hours"])
+            _start_scheduler()
+        else:
+            _stop_scheduler()
+    else:
+        # Toggle current state
+        if _scheduler_state["enabled"]:
+            _stop_scheduler()
+        else:
+            if "interval_hours" in payload:
+                _scheduler_state["interval_hours"] = int(payload["interval_hours"])
+            _start_scheduler()
+
+    return get_scan_schedule()
 
 
 # ── Utility ──────────────────────────────────────────────────────────────────

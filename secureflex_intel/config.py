@@ -82,15 +82,29 @@ class Settings:
     # ── Tender Radar Settings ────────────────────────────────────────────
     @property
     def tender_region(self) -> str:
-        return os.environ.get("TENDER_REGION", "London")
+        return os.environ.get("TENDER_REGION", "all")
 
     @property
     def tender_days_back(self) -> int:
-        return int(os.environ.get("TENDER_DAYS_BACK", "14"))
+        return int(os.environ.get("TENDER_DAYS_BACK", "30"))
 
     @property
     def tender_min_score(self) -> int:
         return int(os.environ.get("TENDER_MIN_SCORE", "45"))
+
+    # ── FTS Settings ─────────────────────────────────────────────────────
+    @property
+    def fts_days_back(self) -> int:
+        return int(os.environ.get("FTS_DAYS_BACK", "30"))
+
+    # ── Auto-Scan Scheduler Settings ─────────────────────────────────────
+    @property
+    def scan_interval_hours(self) -> int:
+        return int(os.environ.get("SCAN_INTERVAL_HOURS", "6"))
+
+    @property
+    def auto_scan(self) -> bool:
+        return os.environ.get("AUTO_SCAN", "true").lower() in ("1", "true", "yes")
 
     # ── Prospector Settings ──────────────────────────────────────────────
     @property

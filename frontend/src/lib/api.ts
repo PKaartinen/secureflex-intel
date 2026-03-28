@@ -115,6 +115,7 @@ export interface Tender {
   link: string
   description_snippet: string
   published_date: string
+  source?: string  // 'contracts_finder' | 'fts'
 }
 
 export interface TendersResponse {
@@ -279,6 +280,14 @@ export interface ScanResponse {
   [key: string]: unknown
 }
 
+export interface ScanSchedule {
+  enabled: boolean
+  interval_hours: number
+  last_run: string | null
+  next_run: string | null
+  running: boolean
+}
+
 export interface ScanRun {
   id: number
   scan_type: string
@@ -312,10 +321,11 @@ export const api = {
 
   pipelineStats: () => get<PipelineStats>('/pipeline/stats'),
 
-  tenders: (params?: { min_score?: number; classification?: string }) => {
+  tenders: (params?: { min_score?: number; classification?: string; source?: string }) => {
     const q = new URLSearchParams()
     if (params?.min_score) q.set('min_score', String(params.min_score))
     if (params?.classification) q.set('classification', params.classification)
+    if (params?.source) q.set('source', params.source)
     return get<TendersResponse>(`/tenders${q.toString() ? '?' + q : ''}`)
   },
 
@@ -362,11 +372,17 @@ export const api = {
   feed: (limit = 50) => get<FeedResponse>(`/feed?limit=${limit}`),
 
   scanTenders: (daysBack = 30) => post<ScanResponse>(`/scan/tenders?days_back=${daysBack}`),
+  scanFTS: () => post<ScanResponse>('/scan/fts'),
   scanProspects: (region = 'london') => post<ScanResponse>(`/scan/prospects?region=${region}`),
   scanCompetitors: (region = 'london') => post<ScanResponse>(`/scan/competitors?region=${region}`),
   scanSignals: () => post<ScanResponse>('/scan/signals'),
 
   scanHistory: () => get<ScanHistoryResponse>('/scan/history'),
+
+  // Auto-scan schedule
+  scanSchedule: () => get<ScanSchedule>('/scan/schedule'),
+  toggleScanSchedule: (payload?: { enabled?: boolean; interval_hours?: number }) =>
+    post<ScanSchedule>('/scan/schedule', payload),
 
   // Pipeline CRUD
   createLead: (data: LeadCreatePayload) => post<{ status: string; company_id: string; lead: Record<string, string> }>('/pipeline', data),
