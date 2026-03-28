@@ -2391,6 +2391,79 @@ def trigger_insolvency_scan(background_tasks: BackgroundTasks):
     return {"status": "scan_started", "type": "insolvency"}
 
 
+# -- Martyn's Law --
+
+@app.post("/api/scan/martyns-law")
+def trigger_martyns_law_scan(background_tasks: BackgroundTasks):
+    """Trigger a Martyn's Law scan."""
+    def run_ml():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.martyns_law import run_scan as ml_scan
+        run_id = record_scan_start("martyns_law")
+        try:
+            result = ml_scan()
+            record_scan_complete(run_id, result.get("signals_written", 0))
+            print(f"[Martyn's Law] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Martyn's Law] Scan error: {e}")
+
+    background_tasks.add_task(run_ml)
+    return {"status": "scan_started", "type": "martyns_law"}
+
+@app.get("/api/protect-duty/prospects")
+def get_protect_duty_prospects(limit: int = 50):
+    """Get prospects with their Protect Duty scores."""
+    try:
+        from secureflex_intel.sources.martyns_law import get_scored_prospects
+        prospects = get_scored_prospects(limit=limit)
+        return {"prospects": prospects}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -- Digital Marketplace --
+
+@app.post("/api/scan/digital-marketplace")
+def trigger_digital_marketplace_scan(background_tasks: BackgroundTasks):
+    """Trigger a Digital Marketplace scan."""
+    def run_dm():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.digital_marketplace import run_scan as dm_scan
+        run_id = record_scan_start("digital_marketplace")
+        try:
+            result = dm_scan()
+            record_scan_complete(run_id, result.get("records_written", 0))
+            print(f"[Digital Marketplace] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Digital Marketplace] Scan error: {e}")
+
+    background_tasks.add_task(run_dm)
+    return {"status": "scan_started", "type": "digital_marketplace"}
+
+
+# -- Charity Commission --
+
+@app.post("/api/scan/charities")
+def trigger_charities_scan(background_tasks: BackgroundTasks):
+    """Trigger a Charity Commission scan."""
+    def run_charities():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
+        from secureflex_intel.sources.charity_commission import run_scan as charities_scan
+        run_id = record_scan_start("charities")
+        try:
+            result = charities_scan()
+            record_scan_complete(run_id, result.get("prospects_written", 0) + result.get("signals_generated", 0))
+            print(f"[Charity Commission] Scan complete: {result}")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Charity Commission] Scan error: {e}")
+
+    background_tasks.add_task(run_charities)
+    return {"status": "scan_started", "type": "charities"}
+
+
 # ── Enrichment Badges Endpoint ──────────────────────────────────────────────
 
 # In-memory cache: (timestamp, data)
