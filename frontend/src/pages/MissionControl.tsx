@@ -18,13 +18,13 @@ import {
 import MiniMap from '../components/MiniMap'
 
 const PIPELINE_STAGE_ORDER = [
-  'Not Contacted', 'Email 1 Sent', 'Email 2 Sent',
-  'Warm / Meeting', 'Pilot Live', 'Won',
+  'Research', 'Outreach', 'Engaged',
+  'Proposal', 'Negotiation', 'Won', 'Lost',
 ]
 const STAGE_COLORS: Record<string, string> = {
-  'Not Contacted': '#6b7280', 'Email 1 Sent': '#f59e0b',
-  'Email 2 Sent': '#f97316', 'Warm / Meeting': '#3b82f6',
-  'Pilot Live': '#8b5cf6', 'Won': '#22c55e',
+  'Research': '#6b7280', 'Outreach': '#f59e0b',
+  'Engaged': '#3b82f6', 'Proposal': '#6366f1',
+  'Negotiation': '#8b5cf6', 'Won': '#22c55e', 'Lost': '#ef4444',
 }
 
 function slugify(s: string) {
@@ -146,7 +146,7 @@ export default function MissionControl() {
 
   const pipelineChartData = useMemo(() => {
     return PIPELINE_STAGE_ORDER.map(stage => ({
-      name: stage.replace('Email 1 Sent', 'Email 1').replace('Email 2 Sent', 'Email 2').replace('Warm / Meeting', 'Warm').replace('Not Contacted', 'New').replace('Pilot Live', 'Pilot'),
+      name: stage,
       count: pipelineStats?.by_status?.[stage] || 0,
       color: STAGE_COLORS[stage] || '#6b7280',
     })).filter(d => d.count > 0)

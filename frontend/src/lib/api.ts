@@ -18,6 +18,16 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return res.json()
 }
 
+async function patch<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`)
+  return res.json()
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface StatusResponse {
@@ -54,6 +64,7 @@ export interface Lead {
   next_action_due_date: string
   next_action_date?: string
   created_at?: string
+  activity?: string
 }
 
 export interface LeadCreatePayload {
@@ -86,6 +97,22 @@ export interface LeadUpdatePayload {
   notes?: string
   next_action?: string
   next_action_date?: string
+  contact_name?: string
+  contact_email?: string
+  contact_phone?: string
+}
+
+export interface ActivityEntry {
+  timestamp: string
+  action: string
+  description: string
+  old_status?: string
+  new_status?: string
+}
+
+export interface ActivityResponse {
+  company_id: string
+  activity: ActivityEntry[]
 }
 
 export interface PipelineResponse {
@@ -445,11 +472,16 @@ export const api = {
   // Pipeline CRUD
   createLead: (data: LeadCreatePayload) => post<{ status: string; company_id: string; lead: Record<string, string> }>('/pipeline', data),
   updateLead: (companyId: string, data: LeadUpdatePayload) =>
-    fetch(`${BASE}/pipeline/${companyId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    }).then(r => { if (!r.ok) throw new Error(`API error ${r.status}`); return r.json() }),
+    patch<{ status: string; company_id: string }>(`/pipeline/${companyId}`, data),
+
+  pipelineActivity: (companyId: string) =>
+    get<ActivityResponse>(`/pipeline/${companyId}/activity`),
+
+  bulkUpdateLeads: (companyIds: string[], updates: Record<string, string>) =>
+    post<{ status: string; count: number }>('/pipeline/bulk-update', { company_ids: companyIds, updates }),
+
+  bulkDeleteLeads: (companyIds: string[]) =>
+    post<{ status: string; count: number }>('/pipeline/bulk-delete', { company_ids: companyIds }),
   deleteLead: (companyId: string) =>
     fetch(`${BASE}/pipeline/${companyId}`, { method: 'DELETE' })
       .then(r => { if (!r.ok) throw new Error(`API error ${r.status}`); return r.json() }),

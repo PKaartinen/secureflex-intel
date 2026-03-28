@@ -106,7 +106,7 @@ function AddToPipeline({ company }: { company: MergedCompany }) {
       address: company.address || '',
       website_url: company.website_url || '',
       source: 'Market Intelligence',
-      status: 'Not Contacted',
+      status: 'Research',
       notes: `Imported from Market Intelligence (${company.entity_type}). SIC: ${company.sic_codes || 'N/A'}`,
       next_action: 'Research company and identify decision maker',
     }),

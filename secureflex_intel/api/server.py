@@ -397,6 +397,33 @@ def get_pipeline(
     return {"total": len(rows), "leads": rows[:limit]}
 
 
+@app.get("/api/pipeline/{company_id}/activity")
+def get_pipeline_activity(company_id: str):
+    """Return the activity log for a pipeline lead."""
+    try:
+        from secureflex_intel.db import db_available, get_engine, pipeline_table
+        from sqlalchemy import select
+        if db_available():
+            engine = get_engine()
+            with engine.connect() as conn:
+                row = conn.execute(
+                    select(pipeline_table).where(pipeline_table.c.company_id == company_id)
+                ).first()
+                if not row:
+                    raise HTTPException(status_code=404, detail="Lead not found")
+                d = dict(row._mapping)
+                raw = d.get("activity") or "[]"
+                try:
+                    activity = json.loads(raw) if isinstance(raw, str) else []
+                except Exception:
+                    activity = []
+                return {"company_id": company_id, "activity": activity}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/pipeline/{company_id}")
 def get_pipeline_lead(company_id: str):
     """Get a single pipeline lead by company_id."""
@@ -457,12 +484,73 @@ def create_pipeline_lead(payload: Dict[str, Any]):
 
 @app.put("/api/pipeline/{company_id}")
 def update_pipeline_lead(company_id: str, payload: Dict[str, Any]):
-    """Update an existing pipeline lead."""
+    """Update an existing pipeline lead (legacy PUT)."""
+    return _patch_pipeline_lead(company_id, payload)
+
+
+@app.patch("/api/pipeline/{company_id}")
+def patch_pipeline_lead(company_id: str, payload: Dict[str, Any]):
+    """Partial update of a pipeline lead with activity logging."""
+    return _patch_pipeline_lead(company_id, payload)
+
+
+def _patch_pipeline_lead(company_id: str, payload: Dict[str, Any]):
+    """Shared implementation for PUT/PATCH pipeline lead update with activity logging."""
     try:
         from secureflex_intel.db import db_available, get_engine, pipeline_table
-        from sqlalchemy import update as sa_update
+        from sqlalchemy import update as sa_update, select
         if db_available():
             engine = get_engine()
+
+            # Fetch current lead for activity logging
+            with engine.connect() as conn:
+                current = conn.execute(
+                    select(pipeline_table).where(pipeline_table.c.company_id == company_id)
+                ).first()
+                if not current:
+                    raise HTTPException(status_code=404, detail="Lead not found")
+                current_d = dict(current._mapping)
+
+            # Build activity entry if status changed
+            old_status = current_d.get("status", "")
+            new_status = payload.get("status", old_status)
+            activity_log = []
+            try:
+                raw = current_d.get("activity") or "[]"
+                activity_log = json.loads(raw) if isinstance(raw, str) else []
+            except Exception:
+                activity_log = []
+
+            if new_status and new_status != old_status:
+                activity_log.append({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "action": "status_change",
+                    "description": f"Status changed from {old_status} to {new_status}",
+                    "old_status": old_status,
+                    "new_status": new_status,
+                })
+
+            # Check for notes change
+            old_notes = current_d.get("notes", "") or ""
+            new_notes = payload.get("notes", old_notes) or ""
+            if new_notes != old_notes:
+                activity_log.append({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "action": "notes_updated",
+                    "description": "Notes updated",
+                })
+
+            # Check for next_action change
+            old_action = current_d.get("next_action", "") or ""
+            new_action = payload.get("next_action", old_action) or ""
+            if new_action != old_action:
+                activity_log.append({
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "action": "next_action_set",
+                    "description": f"Next action set: {new_action[:100]}",
+                })
+
+            payload["activity"] = json.dumps(activity_log)
             payload["last_modified"] = datetime.utcnow()
             valid_cols = {c.name for c in pipeline_table.columns}
             clean = {k: v for k, v in payload.items() if k in valid_cols}
@@ -473,8 +561,101 @@ def update_pipeline_lead(company_id: str, payload: Dict[str, Any]):
                     .values(**clean)
                 )
             return {"status": "updated", "company_id": company_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+@app.post("/api/pipeline/bulk-update")
+def bulk_update_pipeline(payload: Dict[str, Any]):
+    """Bulk update multiple pipeline leads. Payload: { company_ids: [...], updates: { status?, tier? } }"""
+    company_ids = payload.get("company_ids", [])
+    updates = payload.get("updates", {})
+    if not company_ids or not updates:
+        raise HTTPException(status_code=400, detail="company_ids and updates required")
+    try:
+        from secureflex_intel.db import db_available, get_engine, pipeline_table
+        from sqlalchemy import update as sa_update, select
+        if db_available():
+            engine = get_engine()
+            valid_cols = {c.name for c in pipeline_table.columns}
+            clean = {k: v for k, v in updates.items() if k in valid_cols}
+            clean["last_modified"] = datetime.utcnow()
+
+            # For each lead, log activity and update
+            with engine.begin() as conn:
+                for cid in company_ids:
+                    # Fetch current for activity
+                    current = conn.execute(
+                        select(pipeline_table).where(pipeline_table.c.company_id == cid)
+                    ).first()
+                    if not current:
+                        continue
+                    current_d = dict(current._mapping)
+
+                    activity_log = []
+                    try:
+                        raw = current_d.get("activity") or "[]"
+                        activity_log = json.loads(raw) if isinstance(raw, str) else []
+                    except Exception:
+                        activity_log = []
+
+                    if "status" in clean and clean["status"] != current_d.get("status"):
+                        activity_log.append({
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "action": "status_change",
+                            "description": f"Bulk: Status changed from {current_d.get('status', '')} to {clean['status']}",
+                            "old_status": current_d.get("status", ""),
+                            "new_status": clean["status"],
+                        })
+
+                    if "tier" in clean and clean["tier"] != current_d.get("tier"):
+                        activity_log.append({
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "action": "tier_change",
+                            "description": f"Bulk: Tier changed from {current_d.get('tier', '')} to {clean['tier']}",
+                        })
+
+                    update_vals = {**clean, "activity": json.dumps(activity_log)}
+                    conn.execute(
+                        sa_update(pipeline_table)
+                        .where(pipeline_table.c.company_id == cid)
+                        .values(**update_vals)
+                    )
+            return {"status": "updated", "count": len(company_ids)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/pipeline/bulk-delete")
+def bulk_delete_pipeline(payload: Dict[str, Any]):
+    """Bulk delete (archive) multiple pipeline leads."""
+    company_ids = payload.get("company_ids", [])
+    if not company_ids:
+        raise HTTPException(status_code=400, detail="company_ids required")
+    try:
+        from secureflex_intel.db import db_available, get_engine, pipeline_table
+        from sqlalchemy import delete as sa_delete
+        if db_available():
+            engine = get_engine()
+            with engine.begin() as conn:
+                for cid in company_ids:
+                    conn.execute(
+                        sa_delete(pipeline_table)
+                        .where(pipeline_table.c.company_id == cid)
+                    )
+            return {"status": "deleted", "count": len(company_ids)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.delete("/api/pipeline/{company_id}")

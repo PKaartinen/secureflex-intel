@@ -157,6 +157,10 @@ pipeline_table = Table("pipeline_leads", metadata,
     Column("notes", Text),
     Column("next_action", Text),
     Column("next_action_date", String(50)),
+    Column("contact_name", Text, nullable=True),
+    Column("contact_email", Text, nullable=True),
+    Column("contact_phone", Text, nullable=True),
+    Column("activity", Text, default="[]"),
     Column("last_modified", DateTime, default=datetime.utcnow),
     Column("created_at", DateTime, default=datetime.utcnow),
 )
@@ -265,6 +269,39 @@ def init_db():
                 "CREATE INDEX IF NOT EXISTS ix_signal_matches_company_number ON signal_matches(company_number)"
             ))
         print("[DB] Migration: signal_matches table OK")
+
+        # Add activity + contact columns to pipeline_leads
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE pipeline_leads ADD COLUMN IF NOT EXISTS activity TEXT DEFAULT '[]'"
+            ))
+            conn.execute(text(
+                "ALTER TABLE pipeline_leads ADD COLUMN IF NOT EXISTS contact_name TEXT"
+            ))
+            conn.execute(text(
+                "ALTER TABLE pipeline_leads ADD COLUMN IF NOT EXISTS contact_email TEXT"
+            ))
+            conn.execute(text(
+                "ALTER TABLE pipeline_leads ADD COLUMN IF NOT EXISTS contact_phone TEXT"
+            ))
+        print("[DB] Migration: pipeline_leads activity + contact columns OK")
+
+        # Migrate old pipeline statuses to new stages
+        with engine.begin() as conn:
+            conn.execute(text(
+                "UPDATE pipeline_leads SET status = 'Research' WHERE LOWER(status) IN ('not contacted', 'prospect', '')"
+            ))
+            conn.execute(text(
+                "UPDATE pipeline_leads SET status = 'Outreach' WHERE LOWER(status) IN ('email 1 sent', 'email 2 sent', 'email sent')"
+            ))
+            conn.execute(text(
+                "UPDATE pipeline_leads SET status = 'Engaged' WHERE LOWER(status) IN ('responded', 'warm / meeting')"
+            ))
+            conn.execute(text(
+                "UPDATE pipeline_leads SET status = 'Proposal' WHERE LOWER(status) IN ('meeting scheduled', 'pilot live')"
+            ))
+            # Won and Lost stay as-is
+        print("[DB] Migration: pipeline status values migrated to new stages")
 
         return True
     except Exception as e:
