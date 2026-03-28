@@ -138,7 +138,7 @@ export default function CompetitorWatch() {
           <div className="rounded-xl p-4 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
             <p className="text-xs uppercase tracking-wider mb-1" style={{ color: '#6b7280' }}>Active</p>
             <p className="text-2xl font-bold" style={{ color: '#22c55e' }}>
-              {(data?.competitors || []).filter(c => c.status === 'Active').length}
+              {(data?.competitors || []).filter(c => c.status?.toLowerCase().trim() === 'active').length}
             </p>
           </div>
           <div className="rounded-xl p-4 border" style={{ background: '#111827', borderColor: '#1f2937' }}>
@@ -297,7 +297,7 @@ export default function CompetitorWatch() {
               </thead>
               <tbody>
                 {competitors.map((competitor, i) => {
-                  const isActive = competitor.status === 'Active'
+                  const isActive = competitor.status?.toLowerCase().trim() === 'active'
                   const hasAlert = !isActive
                   return (
                     <Tr key={i} onClick={() => setSelectedCompetitor(competitor)}>

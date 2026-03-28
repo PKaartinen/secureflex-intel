@@ -50,18 +50,17 @@ SIGNALS_DIR = str(settings.signals_dir)
 
 # Job search keywords that indicate security purchasing intent
 JOB_SEARCH_QUERIES = [
-    # Companies hiring security = they have a security budget
-    "Security Officer London",
-    "Door Supervisor London",
-    "Security Guard London",
-    "CCTV Operator London",
-    "Loss Prevention London",
-    "Security Manager London",
-    "Head of Security London",
-    # Facilities management roles often include security procurement
-    "Facilities Manager London security",
-    # Property management hires security subcontractors
-    "Property Manager London",
+    # Senior roles — highest scoring
+    "security manager London",
+    "head of security London",
+    "security director London",
+    # Operational roles
+    "security guard London",
+    "security officer London",
+    "door supervisor London",
+    "CCTV operator London",
+    # Facilities / property (procurement signals)
+    "facilities manager London",
 ]
 
 # News search queries for trigger events
@@ -89,11 +88,115 @@ NEWS_SEARCH_QUERIES = [
 # Indeed RSS base URL (public, no API key needed)
 INDEED_RSS_BASE = "https://www.indeed.co.uk/rss"
 
+# Reed RSS base URL (public, no API key needed)
+REED_RSS_BASE = "https://www.reed.co.uk/api/1.0/search"
+
 # Google News RSS
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
 
+# ── UK News Source Filtering ─────────────────────────────────────────────────
 
-# ── Signal Detection ─────────────────────────────────────────────────────────
+# Sources to block entirely (international / irrelevant)
+BLOCKED_SOURCES = [
+    "sabc.co.za", "aljazeera", "hindustantimes", "ndtv", "timesofindia",
+    "channelnewsasia", "straitstimes", "abc.net.au", "cnn.com", "foxnews",
+]
+
+# Trusted UK sources — get a score bonus
+TRUSTED_UK_SOURCES = [
+    "bbc.co.uk", "theguardian.com", "standard.co.uk", "cityam.com",
+    "ft.com", "telegraph.co.uk", "independent.co.uk", "mirror.co.uk",
+    "express.co.uk", "metro.co.uk",
+]
+
+# London boroughs for geographic relevance bonus
+LONDON_BOROUGHS = [
+    "westminster", "camden", "islington", "hackney", "tower hamlets",
+    "greenwich", "lewisham", "southwark", "lambeth", "wandsworth",
+    "hammersmith", "kensington", "chelsea", "fulham", "ealing",
+    "hounslow", "richmond", "kingston", "merton", "sutton",
+    "croydon", "bromley", "bexley", "havering", "barking",
+    "redbridge", "newham", "waltham forest", "haringey", "enfield",
+    "barnet", "harrow", "hillingdon", "canary wharf", "docklands",
+    "city of london", "shoreditch", "brixton", "clapham", "peckham",
+    "stratford", "whitechapel", "bethnal green",
+]
+
+# Crime categories relevant to security sales
+SECURITY_CRIME_CATEGORIES = [
+    "burglary", "robbery", "violent-crime", "criminal-damage-arson", "shoplifting",
+]
+
+
+# ── Signal Scoring ────────────────────────────────────────────────────────────
+
+def classify_score(score: int) -> str:
+    """Classify a numeric score into hot/warm/monitor/low."""
+    if score >= 80:
+        return "hot"
+    elif score >= 50:
+        return "warm"
+    elif score >= 20:
+        return "monitor"
+    else:
+        return "low"
+
+
+def recency_bonus(pub_date: str) -> int:
+    """Return a recency bonus based on how recently the item was published."""
+    if not pub_date:
+        return 0
+    for fmt in [
+        "%a, %d %b %Y %H:%M:%S %Z",
+        "%a, %d %b %Y %H:%M:%S %z",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d",
+    ]:
+        try:
+            dt = datetime.strptime(pub_date, fmt)
+            days_old = (datetime.now() - dt.replace(tzinfo=None)).days
+            if days_old <= 1:
+                return 15
+            elif days_old <= 3:
+                return 10
+            elif days_old <= 7:
+                return 5
+            elif days_old <= 14:
+                return 2
+            return 0
+        except ValueError:
+            continue
+    return 0
+
+
+def source_quality_bonus(source: str) -> int:
+    """Return a bonus/penalty based on source quality and geographic relevance."""
+    source_lower = source.lower()
+    # Block international sources
+    for blocked in BLOCKED_SOURCES:
+        if blocked in source_lower:
+            return -999  # Sentinel: discard this signal
+    # Bonus for trusted UK sources
+    for trusted in TRUSTED_UK_SOURCES:
+        if trusted in source_lower:
+            return 10
+    return 0
+
+
+def geographic_bonus(text: str) -> int:
+    """Return a geographic relevance bonus for London/UK mentions."""
+    text_lower = text.lower()
+    bonus = 0
+    if "london" in text_lower:
+        bonus += 15
+    for borough in LONDON_BOROUGHS:
+        if borough in text_lower:
+            bonus += 10
+            break  # Only count once
+    return bonus
+
+
+# ── Job Posting Signals ───────────────────────────────────────────────────────
 
 def scan_job_postings():
     """
@@ -107,22 +210,25 @@ def scan_job_postings():
     Each posting is a buying signal.
     """
     print("\n🔍 Scanning job postings for security intent signals...")
-    print()
 
     all_signals = []
 
     for query in JOB_SEARCH_QUERIES:
-        print(f"  📋 Searching: '{query}'...")
-
-        # Try Indeed RSS feed
+        print(f"  📋 Searching Indeed: '{query}'...")
         signals = fetch_indeed_rss(query)
         if signals:
             all_signals.extend(signals)
             print(f"    → {len(signals)} postings found")
         else:
-            print(f"    → RSS unavailable or no results")
-
-        time.sleep(2)  # Rate limiting
+            # Fallback: try Reed RSS
+            print(f"    → Indeed unavailable, trying Reed...")
+            reed_signals = fetch_reed_rss(query)
+            if reed_signals:
+                all_signals.extend(reed_signals)
+                print(f"    → {len(reed_signals)} Reed postings found")
+            else:
+                print(f"    → No results from either source")
+        time.sleep(1)
 
     # Deduplicate by title + company
     seen = set()
@@ -150,25 +256,52 @@ def fetch_indeed_rss(query):
         "q": query,
         "l": "London",
         "sort": "date",
-        "fromage": "7",  # Last 7 days
+        "fromage": "14",  # Last 14 days
     }
     url = f"{INDEED_RSS_BASE}?{urlencode(params)}"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; SecureFlex-Scanner/1.0)",
-        "Accept": "application/rss+xml, application/xml, text/xml",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+        "Accept-Language": "en-GB,en;q=0.9",
     }
 
     try:
         req = Request(url, headers=headers)
         with urlopen(req, timeout=15) as response:
             content = response.read()
-            return parse_rss_jobs(content)
-    except Exception as e:
+            signals = parse_rss_jobs(content, "Indeed")
+            return signals
+    except Exception:
         return []
 
 
-def parse_rss_jobs(xml_content):
+def fetch_reed_rss(query):
+    """Fetch job postings from Reed RSS feed as fallback."""
+    # Reed provides a public RSS/search endpoint
+    params = {
+        "keywords": query,
+        "locationName": "London",
+        "distanceFromLocation": 10,
+    }
+    # Reed RSS URL
+    url = f"https://www.reed.co.uk/jobs/rss?{urlencode(params)}"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    }
+
+    try:
+        req = Request(url, headers=headers)
+        with urlopen(req, timeout=15) as response:
+            content = response.read()
+            return parse_rss_jobs(content, "Reed")
+    except Exception:
+        return []
+
+
+def parse_rss_jobs(xml_content, source_name="Indeed"):
     """Parse RSS feed XML into job signal dicts."""
     signals = []
     try:
@@ -182,7 +315,6 @@ def parse_rss_jobs(xml_content):
             link = (item.findtext("link") or "").strip()
             description = (item.findtext("description") or "").strip()
             pub_date = (item.findtext("pubDate") or "").strip()
-            source = (item.findtext("source") or "").strip()
 
             # Extract company name from title (usually "Job Title - Company Name")
             company = ""
@@ -195,8 +327,11 @@ def parse_rss_jobs(xml_content):
             description = re.sub(r"<[^>]+>", " ", description)
             description = re.sub(r"\s+", " ", description).strip()
 
+            if not title:
+                continue
+
             signals.append({
-                "source": "Indeed",
+                "source": source_name,
                 "title": title,
                 "company": company,
                 "description": description[:300],
@@ -214,63 +349,72 @@ def score_job_signal(signal):
     """
     Score a job posting signal for lead quality.
 
-    High-value signals:
-    - Non-security companies posting for security roles (= they buy security externally)
-    - FM companies posting for security (= they procure security subcontracts)
-    - Large companies posting multiple roles (= big budget)
-
-    Lower-value signals:
-    - Security companies hiring (= potential partner, not client)
+    Scoring tiers:
+    - Hot (>=80): Senior security role at a non-security company
+    - Warm (>=50): Operational security role at a non-security company
+    - Monitor (>=20): Security company hiring (competitor intel)
+    - Low (<20): Unrelated / insufficient data
     """
-    score = 50  # Base score
-    signal_type = "potential_client"
-
     title = (signal.get("title") or "").lower()
     company = (signal.get("company") or "").lower()
     description = (signal.get("description") or "").lower()
+    combined = f"{title} {company} {description}"
 
-    # Check if the posting company is a security company (partner, not client)
+    # Base score
+    score = 30
+    signal_type = "job_posting"
+
+    # ── Senior role detection (HOT signals) ──────────────────────────────
+    hot_titles = [
+        "security manager", "security director", "head of security",
+        "chief security", "director of security", "security lead",
+    ]
+    is_senior = any(kw in title for kw in hot_titles)
+    if is_senior:
+        score += 40
+        signal_type = "senior_security_hire"
+
+    # ── Check if posting company is a security company ────────────────────
     security_company_keywords = [
         "security", "guarding", "securitas", "g4s", "mitie", "ocs",
         "kingdom", "corps", "legion", "shield", "sentinel", "vigil",
-        "protection", "patrol", "surveillance",
+        "protection", "patrol", "surveillance", "corps security",
+        "noonan", "gsl", "wilson james", "amulet",
     ]
     is_security_company = any(kw in company for kw in security_company_keywords)
 
     if is_security_company:
-        score -= 20
+        # Security company hiring = competitor intel, not a client signal
+        score -= 15
         signal_type = "competitor_hiring"
     else:
-        score += 20  # Non-security company posting for security = client signal
-        signal_type = "potential_client"
+        # Non-security company posting for security = strong client signal
+        score += 20
+        if is_senior:
+            signal_type = "high_value_client"
+        else:
+            signal_type = "potential_client"
 
-    # Senior roles = bigger budget, more decision-making power
-    senior_keywords = ["manager", "head of", "director", "chief", "lead"]
-    if any(kw in title for kw in senior_keywords):
-        score += 15
-        signal_type = "high_value_client" if not is_security_company else "competitor_hiring"
-
-    # FM companies = they procure security subcontracts
-    fm_keywords = ["facilities", "property", "estate", "building"]
+    # ── FM companies = they procure security subcontracts ─────────────────
+    fm_keywords = ["facilities", "property management", "estate management", "building management"]
     if any(kw in company for kw in fm_keywords):
         score += 10
-        signal_type = "fm_procurement"
+        if not is_security_company:
+            signal_type = "fm_procurement"
 
-    # Venue/hospitality = strong security buyer
-    venue_keywords = ["hotel", "venue", "centre", "mall", "arena", "stadium", "theatre"]
+    # ── Venue/hospitality = strong security buyer ─────────────────────────
+    venue_keywords = ["hotel", "venue", "centre", "mall", "arena", "stadium",
+                      "theatre", "hospital", "university", "college", "school"]
     if any(kw in company for kw in venue_keywords):
         score += 15
-        signal_type = "venue_client"
+        if not is_security_company:
+            signal_type = "venue_client"
 
-    # Large company indicators
-    large_indicators = ["plc", "limited", "ltd", "group", "international"]
-    if any(kw in company for kw in large_indicators):
-        score += 5
+    # ── Geographic relevance ──────────────────────────────────────────────
+    score += geographic_bonus(combined)
 
-    # London-specific bonuses
-    london_keywords = ["london", "westminster", "canary wharf", "city of london"]
-    if any(kw in company.lower() or kw in description for kw in london_keywords):
-        score += 10
+    # ── Recency ───────────────────────────────────────────────────────────
+    score += recency_bonus(signal.get("published", ""))
 
     return min(100, max(0, score)), signal_type
 
@@ -288,7 +432,6 @@ def scan_news_signals():
     - Competitor issues
     """
     print("\n🔍 Scanning news for security trigger events...")
-    print()
 
     all_signals = []
 
@@ -300,25 +443,31 @@ def scan_news_signals():
             print(f"    → {len(signals)} articles found")
         else:
             print(f"    → No results or feed unavailable")
-        time.sleep(2)
+        time.sleep(1)
 
     # Deduplicate by title
     seen = set()
     unique_signals = []
     for sig in all_signals:
-        key = sig.get("title", "").lower()[:60]
+        key = (sig.get("title") or "").lower().strip()
         if key and key not in seen:
             seen.add(key)
             unique_signals.append(sig)
 
-    # Score signals
+    # Score signals — filter out blocked sources first
+    scored = []
     for sig in unique_signals:
-        sig["score"], sig["signal_type"] = score_news_signal(sig)
+        score, signal_type = score_news_signal(sig)
+        if score == -999:
+            continue  # Blocked source — discard
+        sig["score"] = score
+        sig["signal_type"] = signal_type
+        scored.append(sig)
 
-    unique_signals.sort(key=lambda x: x["score"], reverse=True)
+    scored.sort(key=lambda x: x["score"], reverse=True)
 
-    print(f"\n📊 Total unique news signals: {len(unique_signals)}")
-    return unique_signals
+    print(f"\n📊 Total unique news signals: {len(scored)}")
+    return scored
 
 
 def fetch_google_news_rss(query):
@@ -332,8 +481,8 @@ def fetch_google_news_rss(query):
     url = f"{GOOGLE_NEWS_RSS}?{urlencode(params)}"
 
     headers = {
-        "User-Agent": "Mozilla/5.0 (compatible; SecureFlex-Scanner/1.0)",
-        "Accept": "application/rss+xml, application/xml, text/xml",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
     }
 
     try:
@@ -341,7 +490,7 @@ def fetch_google_news_rss(query):
         with urlopen(req, timeout=15) as response:
             content = response.read()
             return parse_rss_news(content, query)
-    except Exception as e:
+    except Exception:
         return []
 
 
@@ -366,15 +515,19 @@ def parse_rss_news(xml_content, query):
             description = re.sub(r"<[^>]+>", " ", description)
             description = re.sub(r"\s+", " ", description).strip()
 
+            if not title:
+                continue
+
             signals.append({
                 "source": f"Google News ({source})",
                 "title": title,
-                "company": "",  # Will be extracted during scoring
+                "company": "",
                 "description": description[:300],
                 "link": link,
                 "published": pub_date,
                 "signal_category": "news",
                 "query": query,
+                "_raw_source": source,  # For source quality check
             })
     except ElementTree.ParseError:
         pass
@@ -383,68 +536,85 @@ def parse_rss_news(xml_content, query):
 
 
 def score_news_signal(signal):
-    """Score a news article for security business relevance."""
-    score = 30
-    signal_type = "general_news"
+    """
+    Score a news article for security business relevance.
 
+    Scoring tiers:
+    - Hot (>=80): Direct security incident/contract at a known company
+    - Warm (>=50): Hotel/venue expansion, FM change, moderate crime
+    - Monitor (>=20): General UK/London security industry news
+    - Low (<20): Irrelevant / international / tangential
+    """
     title = (signal.get("title") or "").lower()
     description = (signal.get("description") or "").lower()
     combined = f"{title} {description}"
+    raw_source = signal.get("_raw_source", "")
+    full_source = signal.get("source", "")
 
-    # Security incident = high-value trigger
-    incident_keywords = ["break-in", "robbery", "assault", "theft", "shoplifting",
-                         "security breach", "security incident", "burglary",
-                         "trespass", "vandalism"]
-    if any(kw in combined for kw in incident_keywords):
-        score += 30
+    # ── Source quality check ──────────────────────────────────────────────
+    sq = source_quality_bonus(raw_source or full_source)
+    if sq == -999:
+        return -999, "blocked"  # Discard signal from blocked source
+
+    # ── Base score ────────────────────────────────────────────────────────
+    score = 20
+    signal_type = "general_news"
+
+    # ── HOT: Direct security incident at a company/venue ─────────────────
+    hot_keywords = [
+        "security manager", "security director", "head of security",
+        "security contract", "security breach", "break-in",
+        "armed robbery", "security tender awarded",
+    ]
+    if any(kw in combined for kw in hot_keywords):
+        score += 55
+        signal_type = "hot_security_signal"
+
+    # ── WARM: Incident / expansion / change signals ───────────────────────
+    warm_incident_keywords = [
+        "robbery", "burglary", "assault", "theft", "shoplifting",
+        "security incident", "trespass", "vandalism", "criminal damage",
+    ]
+    if any(kw in combined for kw in warm_incident_keywords):
+        score += 25
         signal_type = "security_incident"
 
-    # Contract/tender = direct opportunity
-    contract_keywords = ["tender", "contract", "awarded", "procurement",
-                         "bid", "framework", "outsource"]
-    if any(kw in combined for kw in contract_keywords):
-        score += 35
-        signal_type = "contract_opportunity"
-
-    # New development = future opportunity
-    development_keywords = ["opening", "new development", "planning permission",
-                           "expansion", "new venue", "construction", "new build"]
-    if any(kw in combined for kw in development_keywords):
+    warm_expansion_keywords = [
+        "hotel opening", "new hotel", "venue opening", "new venue",
+        "expansion", "new development", "planning permission",
+        "fm change", "facilities management change", "corporate relocation",
+        "new office", "new building",
+    ]
+    if any(kw in combined for kw in warm_expansion_keywords):
         score += 20
         signal_type = "new_development"
 
-    # Competitor issues = poaching opportunity
-    competitor_keywords = ["security company", "security firm", "security provider",
-                          "complaint", "problem", "failure", "poor service"]
+    # ── Contract/tender = direct opportunity ─────────────────────────────
+    contract_keywords = [
+        "tender", "contract", "awarded", "procurement",
+        "bid", "framework", "outsource",
+    ]
+    if any(kw in combined for kw in contract_keywords):
+        score += 30
+        signal_type = "contract_opportunity"
+
+    # ── Competitor issues = poaching opportunity ──────────────────────────
+    competitor_keywords = [
+        "security company", "security firm", "security provider",
+        "complaint", "problem", "failure", "poor service",
+    ]
     if sum(1 for kw in competitor_keywords if kw in combined) >= 2:
-        score += 25
+        score += 20
         signal_type = "competitor_issue"
 
-    # London bonus
-    london_keywords = ["london", "westminster", "canary wharf", "docklands",
-                       "city of london", "hackney", "camden", "islington"]
-    if any(kw in combined for kw in london_keywords):
-        score += 15
+    # ── Geographic relevance ──────────────────────────────────────────────
+    score += geographic_bonus(combined)
 
-    # Recency bonus (published in last 7 days)
-    pub_date = signal.get("published", "")
-    if pub_date:
-        try:
-            # RSS dates can be various formats
-            for fmt in ["%a, %d %b %Y %H:%M:%S %Z", "%a, %d %b %Y %H:%M:%S %z",
-                       "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d"]:
-                try:
-                    dt = datetime.strptime(pub_date, fmt)
-                    days_old = (datetime.now() - dt.replace(tzinfo=None)).days
-                    if days_old <= 2:
-                        score += 10
-                    elif days_old <= 7:
-                        score += 5
-                    break
-                except ValueError:
-                    continue
-        except Exception:
-            pass
+    # ── Source quality bonus ──────────────────────────────────────────────
+    score += sq
+
+    # ── Recency bonus ─────────────────────────────────────────────────────
+    score += recency_bonus(signal.get("published", ""))
 
     return min(100, max(0, score)), signal_type
 
@@ -453,76 +623,98 @@ def score_news_signal(signal):
 
 def scan_crime_data(latitude=51.5074, longitude=-0.1278, radius_miles=1):
     """
-    Fetch crime data from the Police API for a specific area.
+    Fetch crime data from the Police UK API for central London.
 
-    This is useful for creating "Security Risk Briefings" for prospects
-    in specific areas — a powerful sales tool.
+    Uses the street-level crimes endpoint for the last 3 months.
+    Clusters crimes by category+area+month to create one signal per cluster.
 
-    API: https://data.police.uk/docs/
+    API: https://data.police.uk/api/crimes-street/all-crime
     Free, no API key required.
     """
     print(f"\n🔍 Scanning Met Police crime data...")
     print(f"   Location: {latitude}, {longitude}")
-    print(f"   Radius: ~{radius_miles} mile(s)")
-    print()
 
-    # Get the latest available month
-    url = "https://data.police.uk/api/crime-last-updated"
-    try:
-        req = Request(url, headers={"User-Agent": "SecureFlex-Scanner/1.0"})
-        with urlopen(req, timeout=15) as response:
-            data = json.loads(response.read())
-            latest_month = data.get("date", "")
-            print(f"  📅 Latest available data: {latest_month}")
-    except Exception as e:
-        print(f"  ⚠️  Could not check latest month: {e}")
-        latest_month = (datetime.now() - timedelta(days=60)).strftime("%Y-%m")
+    signals = []
 
-    # Fetch crimes at location
-    params = {
-        "lat": latitude,
-        "lng": longitude,
-        "date": latest_month,
-    }
-    crimes_url = f"https://data.police.uk/api/crimes-at-location?{urlencode(params)}"
+    # Fetch last 3 months of data
+    months_to_fetch = []
+    for months_back in range(1, 4):
+        dt = datetime.now() - timedelta(days=30 * months_back)
+        months_to_fetch.append(dt.strftime("%Y-%m"))
 
-    try:
-        req = Request(crimes_url, headers={"User-Agent": "SecureFlex-Scanner/1.0"})
-        with urlopen(req, timeout=30) as response:
-            crimes = json.loads(response.read())
+    for month in months_to_fetch:
+        print(f"  📅 Fetching crimes for {month}...")
+        url = (
+            f"https://data.police.uk/api/crimes-street/all-crime"
+            f"?lat={latitude}&lng={longitude}&date={month}"
+        )
+        try:
+            req = Request(url, headers={"User-Agent": "SecureFlex-Scanner/1.0"})
+            with urlopen(req, timeout=30) as response:
+                crimes = json.loads(response.read())
 
-        if not crimes:
-            print("  No crimes found at this exact location.")
-            print("  Try street-level API with broader area.")
-            return []
+            if not crimes:
+                print(f"    → No crimes found for {month}")
+                continue
 
-        # Categorize crimes
-        categories = {}
-        for crime in crimes:
-            cat = crime.get("category", "other")
-            categories[cat] = categories.get(cat, 0) + 1
+            print(f"    → {len(crimes)} crimes found")
 
-        print(f"\n  📊 Crime Summary ({latest_month}):")
-        for cat, count in sorted(categories.items(), key=lambda x: x[1], reverse=True):
-            emoji = "🔴" if count > 5 else "🟡" if count > 2 else "🟢"
-            print(f"    {emoji} {cat}: {count}")
+            # Cluster by category
+            categories: dict = {}
+            for crime in crimes:
+                cat = crime.get("category", "other")
+                if cat not in categories:
+                    categories[cat] = []
+                categories[cat].append(crime)
 
-        # Flag security-relevant crime types
-        security_relevant = [
-            "burglary", "robbery", "shoplifting", "theft-from-the-person",
-            "other-theft", "violent-crime", "criminal-damage-arson",
-            "anti-social-behaviour",
-        ]
-        relevant_count = sum(categories.get(c, 0) for c in security_relevant)
-        total = len(crimes)
+            # Create one signal per relevant category cluster
+            for cat, cat_crimes in categories.items():
+                if cat not in SECURITY_CRIME_CATEGORIES:
+                    continue
+                count = len(cat_crimes)
+                # Score based on count and category severity
+                base = 25
+                if cat in ("robbery", "violent-crime"):
+                    base = 45
+                elif cat in ("burglary", "criminal-damage-arson"):
+                    base = 35
+                elif cat in ("shoplifting",):
+                    base = 30
 
-        print(f"\n  Security-relevant crimes: {relevant_count}/{total} ({relevant_count/max(total,1)*100:.0f}%)")
+                # Volume multiplier
+                if count >= 20:
+                    base += 20
+                elif count >= 10:
+                    base += 10
+                elif count >= 5:
+                    base += 5
 
-        return crimes
+                score = min(100, base)
+                signal_type = f"crime_{cat.replace('-', '_')}"
 
-    except Exception as e:
-        print(f"  ⚠️  Error fetching crime data: {e}")
-        return []
+                signals.append({
+                    "source": "Police UK API",
+                    "title": f"{cat.replace('-', ' ').title()} cluster — {count} incidents ({month})",
+                    "company": "",
+                    "description": (
+                        f"{count} {cat.replace('-', ' ')} incidents near central London "
+                        f"({latitude}, {longitude}) in {month}. "
+                        f"High crime area — strong security services opportunity."
+                    ),
+                    "link": f"https://data.police.uk/api/crimes-street/all-crime?lat={latitude}&lng={longitude}&date={month}",
+                    "published": f"{month}-01",
+                    "signal_category": "crime",
+                    "signal_type": signal_type,
+                    "score": score,
+                })
+
+        except Exception as e:
+            print(f"    ⚠️  Error fetching crime data for {month}: {e}")
+
+        time.sleep(1)
+
+    print(f"\n📊 Total crime signals generated: {len(signals)}")
+    return signals
 
 
 # ── Google Alerts Setup Guide ────────────────────────────────────────────────
@@ -587,7 +779,6 @@ def print_google_alerts_setup():
 
     print()
     print("─── SPECIFIC PROSPECT MONITORING ───")
-    print("  Add an alert for each major prospect company:")
     print('  ✅ "Westfield London" security')
     print('  ✅ "Canary Wharf Group" security')
     print('  ✅ "British Land" security')
@@ -614,17 +805,27 @@ def print_google_alerts_setup():
 
 # ── Output ───────────────────────────────────────────────────────────────────
 
-def save_signals_report(job_signals, news_signals, crime_data=None):
+def save_signals_report(job_signals, news_signals, crime_signals=None):
     """Save all signals to a comprehensive report."""
     today = datetime.now().strftime("%Y-%m-%d")
     filepath = os.path.join(SIGNALS_DIR, f"intent_signals_{today}.md")
+
+    crime_signals = crime_signals or []
+
+    hot_jobs = [s for s in job_signals if s.get("score", 0) >= 80]
+    warm_jobs = [s for s in job_signals if 50 <= s.get("score", 0) < 80]
+    other_jobs = [s for s in job_signals if s.get("score", 0) < 50]
+
+    hot_news = [s for s in news_signals if s.get("score", 0) >= 80]
+    warm_news = [s for s in news_signals if 50 <= s.get("score", 0) < 80]
 
     lines = [
         f"# Intent Signal Scan — {today}",
         "",
         f"**Scan Time:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
-        f"**Job Signals:** {len(job_signals)}",
-        f"**News Signals:** {len(news_signals)}",
+        f"**Job Signals:** {len(job_signals)} (🔴 {len(hot_jobs)} hot, 🟡 {len(warm_jobs)} warm)",
+        f"**News Signals:** {len(news_signals)} (🔴 {len(hot_news)} hot, 🟡 {len(warm_news)} warm)",
+        f"**Crime Signals:** {len(crime_signals)}",
         "",
         "---",
         "",
@@ -632,29 +833,29 @@ def save_signals_report(job_signals, news_signals, crime_data=None):
 
     # Job signals
     if job_signals:
-        hot_jobs = [s for s in job_signals if s["score"] >= 70]
-        warm_jobs = [s for s in job_signals if 50 <= s["score"] < 70]
-        other_jobs = [s for s in job_signals if s["score"] < 50]
-
         lines.append("## 📋 Job Posting Signals")
         lines.append("")
-        lines.append(f"**Total:** {len(job_signals)} | "
-                     f"**Hot:** {len(hot_jobs)} | "
-                     f"**Warm:** {len(warm_jobs)} | "
-                     f"**Other:** {len(other_jobs)}")
+        lines.append(
+            f"**Total:** {len(job_signals)} | "
+            f"**Hot:** {len(hot_jobs)} | "
+            f"**Warm:** {len(warm_jobs)} | "
+            f"**Other:** {len(other_jobs)}"
+        )
         lines.append("")
 
-        for category, items in [("🔴 Hot Signals", hot_jobs),
-                                 ("🟡 Warm Signals", warm_jobs),
-                                 ("🟢 Other", other_jobs[:20])]:
+        for category, items in [
+            ("🔴 Hot Signals (≥80)", hot_jobs),
+            ("🟡 Warm Signals (50–79)", warm_jobs),
+            ("🟢 Other", other_jobs[:20]),
+        ]:
             if items:
                 lines.append(f"### {category}")
                 lines.append("")
                 for sig in items:
-                    lines.append(f"- **[{sig['score']}/100]** {sig['title']}")
+                    lines.append(f"- **[{sig.get('score', 0)}/100]** {sig['title']}")
                     if sig.get("company"):
                         lines.append(f"  - Company: {sig['company']}")
-                    lines.append(f"  - Type: {sig['signal_type']}")
+                    lines.append(f"  - Type: {sig.get('signal_type', '')}")
                     lines.append(f"  - Source: {sig['source']}")
                     if sig.get("link"):
                         lines.append(f"  - Link: {sig['link']}")
@@ -662,24 +863,25 @@ def save_signals_report(job_signals, news_signals, crime_data=None):
 
     # News signals
     if news_signals:
-        hot_news = [s for s in news_signals if s["score"] >= 60]
-        warm_news = [s for s in news_signals if 40 <= s["score"] < 60]
-
         lines.append("## 📰 News & Event Signals")
         lines.append("")
-        lines.append(f"**Total:** {len(news_signals)} | "
-                     f"**Hot:** {len(hot_news)} | "
-                     f"**Warm:** {len(warm_news)}")
+        lines.append(
+            f"**Total:** {len(news_signals)} | "
+            f"**Hot:** {len(hot_news)} | "
+            f"**Warm:** {len(warm_news)}"
+        )
         lines.append("")
 
-        for category, items in [("🔴 Hot Signals", hot_news),
-                                 ("🟡 Warm Signals", warm_news)]:
+        for category, items in [
+            ("🔴 Hot Signals (≥80)", hot_news),
+            ("🟡 Warm Signals (50–79)", warm_news),
+        ]:
             if items:
                 lines.append(f"### {category}")
                 lines.append("")
                 for sig in items:
-                    lines.append(f"- **[{sig['score']}/100]** {sig['title']}")
-                    lines.append(f"  - Type: {sig['signal_type']}")
+                    lines.append(f"- **[{sig.get('score', 0)}/100]** {sig['title']}")
+                    lines.append(f"  - Type: {sig.get('signal_type', '')}")
                     lines.append(f"  - Source: {sig['source']}")
                     if sig.get("link"):
                         lines.append(f"  - Link: {sig['link']}")
@@ -687,38 +889,15 @@ def save_signals_report(job_signals, news_signals, crime_data=None):
                         lines.append(f"  - Summary: {sig['description'][:150]}")
                     lines.append("")
 
-    # Action items
-    lines.append("## 📌 Recommended Actions")
-    lines.append("")
-
-    if job_signals:
-        hot_jobs = [s for s in job_signals if s["score"] >= 70]
-        if hot_jobs:
-            lines.append("### From Job Signals:")
-            for sig in hot_jobs[:5]:
-                company = sig.get("company", "Unknown")
-                lines.append(f"1. **Research {company}** — Posted '{sig['title'][:50]}'")
-                lines.append(f"   - Find decision maker on LinkedIn")
-                lines.append(f"   - Check if they use external security provider")
-                lines.append(f"   - Prepare personalized outreach angle")
-                lines.append("")
-
-    if news_signals:
-        hot_news = [s for s in news_signals if s["score"] >= 60]
-        if hot_news:
-            lines.append("### From News Signals:")
-            for sig in hot_news[:5]:
-                lines.append(f"1. **{sig['title'][:60]}** ({sig['signal_type']})")
-                if sig["signal_type"] == "security_incident":
-                    lines.append(f"   - Research affected venue/company")
-                    lines.append(f"   - Prepare security assessment offer")
-                elif sig["signal_type"] == "contract_opportunity":
-                    lines.append(f"   - Review full tender details")
-                    lines.append(f"   - Prepare response/expression of interest")
-                elif sig["signal_type"] == "new_development":
-                    lines.append(f"   - Research developer/operator")
-                    lines.append(f"   - Prepare early engagement outreach")
-                lines.append("")
+    # Crime signals
+    if crime_signals:
+        lines.append("## 🔒 Crime Signals")
+        lines.append("")
+        for sig in crime_signals:
+            lines.append(f"- **[{sig.get('score', 0)}/100]** {sig['title']}")
+            if sig.get("description"):
+                lines.append(f"  - {sig['description'][:150]}")
+            lines.append("")
 
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -799,7 +978,7 @@ def main():
 
     job_signals = []
     news_signals = []
-    crime_data = []
+    crime_signals = []
 
     if args.source in ["all", "jobs"]:
         job_signals = scan_job_postings()
@@ -808,17 +987,17 @@ def main():
         news_signals = scan_news_signals()
 
     if args.source in ["all", "crime"]:
-        crime_data = scan_crime_data(args.lat, args.lng)
+        crime_signals = scan_crime_data(args.lat, args.lng)
 
     if args.source == "google-alerts":
         print_google_alerts_setup()
         return
 
     # Save outputs
-    all_signals = job_signals + news_signals
+    all_signals = job_signals + news_signals + crime_signals
 
     if all_signals:
-        report_path = save_signals_report(job_signals, news_signals, crime_data)
+        report_path = save_signals_report(job_signals, news_signals, crime_signals)
         print(f"\n📄 Full report saved to: {report_path}")
 
         if job_signals:
@@ -829,6 +1008,10 @@ def main():
             csv_path = save_signals_csv(news_signals, f"news_signals_{today}.csv")
             print(f"📊 News signals CSV: {csv_path}")
 
+        if crime_signals:
+            csv_path = save_signals_csv(crime_signals, f"crime_signals_{today}.csv")
+            print(f"📊 Crime signals CSV: {csv_path}")
+
     # Summary
     print()
     print("━" * 50)
@@ -836,37 +1019,30 @@ def main():
     print("━" * 50)
 
     if job_signals:
-        hot = len([s for s in job_signals if s["score"] >= 70])
-        warm = len([s for s in job_signals if 50 <= s["score"] < 70])
-        print(f"  📋 Job Signals: {len(job_signals)} total ({hot} hot, {warm} warm)")
+        hot = len([s for s in job_signals if s.get("score", 0) >= 80])
+        warm = len([s for s in job_signals if 50 <= s.get("score", 0) < 80])
+        monitor = len([s for s in job_signals if 20 <= s.get("score", 0) < 50])
+        print(f"  📋 Job Signals: {len(job_signals)} total ({hot} hot, {warm} warm, {monitor} monitor)")
 
     if news_signals:
-        hot = len([s for s in news_signals if s["score"] >= 60])
-        warm = len([s for s in news_signals if 40 <= s["score"] < 60])
-        print(f"  📰 News Signals: {len(news_signals)} total ({hot} hot, {warm} warm)")
+        hot = len([s for s in news_signals if s.get("score", 0) >= 80])
+        warm = len([s for s in news_signals if 50 <= s.get("score", 0) < 80])
+        monitor = len([s for s in news_signals if 20 <= s.get("score", 0) < 50])
+        print(f"  📰 News Signals: {len(news_signals)} total ({hot} hot, {warm} warm, {monitor} monitor)")
 
-    if crime_data:
-        print(f"  🔒 Crime Data: {len(crime_data)} incidents at location")
+    if crime_signals:
+        print(f"  🔒 Crime Signals: {len(crime_signals)} clusters")
 
-    if not all_signals and not crime_data:
+    if not all_signals:
         print("  ⚠️  No signals detected. This is normal if:")
         print("     - RSS feeds are temporarily unavailable")
         print("     - No matching content in the search period")
         print()
         print("  💡 Recommended fallback actions:")
-        print("     1. Set up Google Alerts: python3 scripts/intent_signal_scanner.py --source google-alerts")
+        print("     1. Set up Google Alerts: --source google-alerts")
         print("     2. Manually check Indeed.co.uk for 'Security Officer London'")
         print("     3. Check Google News for 'security incident London'")
-        print("     4. Review Contracts Finder: python3 scripts/tender_radar.py")
 
-    print()
-    print("💡 Next steps:")
-    print("   1. Review the intent signal report")
-    print("   2. Research hot-signal companies on LinkedIn")
-    print("   3. Add promising leads to pipeline: python3 scripts/build_pipeline_master.py")
-    print("   4. Generate outreach for new leads: python3 scripts/daily_outreach.py")
-    print("   5. Set up Google Alerts for ongoing monitoring:")
-    print("      python3 scripts/intent_signal_scanner.py --source google-alerts")
     print()
     print("✅ Scan complete!")
 

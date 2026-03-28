@@ -351,7 +351,7 @@ function TenderDossier({ tender }: { tender: Record<string, string | number | bo
     if (!companyKey) { setFetching(false); return }
     setFetching(true)
     api.getDossierByCompany(companyKey).then(result => {
-      if (result) {
+      if (result?.dossier_markdown) {
         setDossier(result.dossier_markdown)
         setGeneratedAt(result.updated_at || result.generated_at)
         setSources(result.sources_used || [])

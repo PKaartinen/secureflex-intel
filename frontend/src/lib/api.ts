@@ -241,7 +241,7 @@ export interface DossierResponse {
   region?: string
   generated_at: string
   updated_at?: string
-  dossier_markdown: string
+  dossier_markdown: string | null
   sources_used: string[]
   data_summary: {
     has_prospect_record: boolean

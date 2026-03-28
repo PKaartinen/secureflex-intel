@@ -738,7 +738,7 @@ function ProspectDossier({ prospect }: { prospect: Prospect }) {
     setError('')
     setFetching(true)
     api.getDossierByCompany(companyKey).then(result => {
-      if (result) {
+      if (result?.dossier_markdown) {
         setDossier(result.dossier_markdown)
         setGeneratedAt(result.updated_at || result.generated_at)
         setSources(result.sources_used || [])

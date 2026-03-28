@@ -32,7 +32,8 @@ export default function ResearchBriefs() {
     setDossierLoading(true)
     try {
       const result = await api.getDossierByCompany(item.company_key)
-      setDossierContent(result)
+      // Treat a response with null dossier_markdown as no dossier (server returns 200 with null instead of 404)
+      setDossierContent(result?.dossier_markdown ? result : null)
     } finally {
       setDossierLoading(false)
     }
@@ -283,7 +284,7 @@ function GenerateDossierForm({
   const [websiteUrl, setWebsiteUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [result, setResult] = useState<{ dossier_markdown: string; sources_used: string[] } | null>(null)
+  const [result, setResult] = useState<{ dossier_markdown: string | null; sources_used: string[] } | null>(null)
 
   const generate = async () => {
     if (!companyName.trim()) {

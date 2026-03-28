@@ -354,44 +354,56 @@ def format_company_for_pipeline(company, source_type="Companies House"):
     company_number = company.get("company_number", "")
     company_name = company.get("company_name", company.get("title", ""))
 
-    # Determine company type based on SIC codes (priority order: most specific first)
-    company_type = "Corporate"
-    for code in sic_codes:
-        if code in SECURITY_SIC_CODES:
+    # Determine company type based on PRIMARY SIC code only (first in list).
+    # Using the primary code prevents secondary SIC codes from misclassifying companies.
+    company_type = "Other"
+    primary_sic = sic_codes[0] if sic_codes else ""
+
+    if primary_sic:
+        if primary_sic.startswith("801") or primary_sic.startswith("802") or primary_sic.startswith("803"):
+            # 80100 Private Security, 80200 Security Systems, 80300 Investigation
             company_type = "Prime Contractor"
-            break
-        elif code in ["68100", "68201", "68209", "68320",
-                      "81100", "81210", "81221", "81222", "81290"]:
+        elif primary_sic.startswith("68"):
+            # 68xxx = Real Estate (NOT Facilities Management)
+            company_type = "Real Estate"
+        elif primary_sic.startswith("81"):
+            # 81xxx = Facilities Management
             company_type = "Facilities Management"
-        elif code in ["55100", "55201", "55202", "55209", "55300"]:
+        elif primary_sic.startswith("55"):
+            # 55xxx = Hotels/Accommodation
             company_type = "Hotel"
-        elif code in ["47110", "47190", "47710", "47720", "47730",
-                      "47740", "47750", "47760", "47770", "47789",
-                      "47810", "47910"]:
+        elif primary_sic.startswith("47"):
+            # 47xxx = Retail
             company_type = "Retail"
-        elif code.startswith("86") or code.startswith("87") or code.startswith("88"):
-            company_type = "Healthcare"
-        elif code.startswith("85"):
-            company_type = "Education"
-        elif code.startswith("41") or code.startswith("42") or code.startswith("43"):
-            company_type = "Construction"
-        elif code in ["52100", "52211", "52212", "52213", "52219",
-                      "52220", "52230", "52241", "52242", "52243",
-                      "52290", "49410", "49420"]:
-            company_type = "Warehouse/Logistics"
-        elif code in ["84110", "84120", "84130", "84210", "84220",
-                      "84230", "84240", "84250", "84300"]:
-            company_type = "Local Authority"
-        elif code in ["93110", "93120", "93130", "93191", "93199",
-                      "93210", "93290", "90010", "90020", "90030",
-                      "90040", "91020", "91030",
-                      "56101", "56102", "56210", "56301", "56302"]:
+        elif primary_sic.startswith("56"):
+            # 56xxx = Restaurants/Food
             company_type = "Venue/Events"
-        elif code in ["64110", "64191", "64192", "64205", "64209",
-                      "64301", "64302", "65110", "65120", "65201",
-                      "65202", "66110", "66120", "66190",
-                      "70100", "70221", "70229"]:
+        elif primary_sic.startswith("86") or primary_sic.startswith("87") or primary_sic.startswith("88"):
+            # 86xxx-88xxx = Healthcare
+            company_type = "Healthcare"
+        elif primary_sic.startswith("85"):
+            # 85xxx = Education
+            company_type = "Education"
+        elif primary_sic.startswith("41") or primary_sic.startswith("42") or primary_sic.startswith("43"):
+            # 41xxx-43xxx = Construction
+            company_type = "Construction"
+        elif primary_sic.startswith("52"):
+            # 52xxx = Warehousing/Logistics
+            company_type = "Warehouse/Logistics"
+        elif primary_sic.startswith("90") or primary_sic.startswith("91") or primary_sic.startswith("92") or primary_sic.startswith("93"):
+            # 90xxx-93xxx = Venue/Events/Entertainment
+            company_type = "Venue/Events"
+        elif primary_sic.startswith("64") or primary_sic.startswith("65") or primary_sic.startswith("66"):
+            # 64xxx-66xxx = Financial Services
             company_type = "Corporate"
+        elif primary_sic.startswith("84"):
+            # 84xxx = Public Administration
+            company_type = "Local Authority"
+        elif primary_sic.startswith("70"):
+            # 70xxx = Corporate/Management
+            company_type = "Corporate"
+        else:
+            company_type = "Other"
 
     # Determine region
     detected_region = "Unknown"

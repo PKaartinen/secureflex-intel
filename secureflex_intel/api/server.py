@@ -614,7 +614,8 @@ def get_dossier_by_company(company_key: str):
                     }
     except Exception as e:
         print(f"[Dossier] Lookup failed: {e}")
-    raise HTTPException(status_code=404, detail="No dossier found for this company")
+    # Return 200 with null dossier_markdown instead of 404 to avoid console errors
+    return {"dossier_markdown": None, "company_key": company_key}
 
 
 @app.get("/api/dossier/list")
