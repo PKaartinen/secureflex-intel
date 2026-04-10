@@ -656,6 +656,9 @@ def run_scan(days_back=None, add_to_pipeline_flag=False):
 
     # Search for each query term
     all_releases = {}
+    consecutive_zero_new = 0
+    MAX_ZERO_NEW_BEFORE_STOP = 3  # Stop after 3 consecutive keywords that add nothing
+
     for query in SEARCH_QUERIES:
         print(f"  🔍 Searching for: '{query}'...")
         releases = search_contracts_finder(
@@ -675,6 +678,15 @@ def run_scan(days_back=None, add_to_pipeline_flag=False):
                 new_count += 1
 
         print(f"    ✅ {len(releases)} results, {new_count} new ({len(all_releases)} unique total)")
+
+        if new_count == 0:
+            consecutive_zero_new += 1
+            if consecutive_zero_new >= MAX_ZERO_NEW_BEFORE_STOP:
+                print(f"  ⏭️  Stopping keyword search — {MAX_ZERO_NEW_BEFORE_STOP} consecutive searches added no new results")
+                break
+        else:
+            consecutive_zero_new = 0  # Reset counter when we find new results
+
         time.sleep(1.5)
 
     print(f"[CF] Total unique releases: {len(all_releases)}")
@@ -798,6 +810,9 @@ def main():
 
     # Search for each query term
     all_releases = {}  # Deduplicate by ocid
+    consecutive_zero_new = 0
+    MAX_ZERO_NEW_BEFORE_STOP = 3  # Stop after 3 consecutive keywords that add nothing
+
     for query in SEARCH_QUERIES:
         print(f"🔍 Searching for: '{query}'...")
         releases = search_contracts_finder(
@@ -817,6 +832,15 @@ def main():
                 new_count += 1
 
         print(f"  ✅ {len(releases)} results, {new_count} new ({len(all_releases)} unique total)")
+
+        if new_count == 0:
+            consecutive_zero_new += 1
+            if consecutive_zero_new >= MAX_ZERO_NEW_BEFORE_STOP:
+                print(f"  ⏭️  Stopping keyword search — {MAX_ZERO_NEW_BEFORE_STOP} consecutive searches added no new results")
+                break
+        else:
+            consecutive_zero_new = 0  # Reset counter when we find new results
+
         time.sleep(1.5)
 
     print()

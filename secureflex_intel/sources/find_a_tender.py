@@ -45,9 +45,21 @@ FTS_CPV_CODES = [
 ]
 
 FTS_CPV_PREFIXES = [
-    "7971",    # Security services family
-    "35120",   # Surveillance systems
-    "50610",   # Security equipment maintenance
+    "7971",   # Investigation and security services (79710000)
+    "7972",   # Guard services (79720000)
+    "7973",   # Investigation services (79730000)
+    "79714",  # Surveillance services (79714000)
+    "35120",  # Surveillance and security systems and devices
+    "35121",  # Security equipment
+    "35125",  # Surveillance system
+    "50610",  # Security equipment repair and maintenance
+    "50340",  # Repair of security equipment (50340000)
+    "9252",   # Museum and preservation services (may need guarding)
+    "7983",   # Accommodation management services
+    "79710",  # Security services
+    "79711",  # Alarm monitoring services
+    "79713",  # Guard services
+    "79715",  # Patrol services
 ]
 
 # Keywords for searching and scoring
@@ -76,6 +88,8 @@ FTS_SCORING_KEYWORDS = [
     "corporate security", "retail security", "loss prevention",
     "guarding", "security staffing", "site security",
     "concierge", "facilities management security",
+    "bodyguard", "manned guarding", "key holding",
+    "alarm response", "risk assessment", "security consultant",
 ]
 
 LONDON_REGIONS = [

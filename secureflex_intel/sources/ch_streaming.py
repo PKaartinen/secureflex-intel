@@ -458,9 +458,20 @@ def run_scan() -> Dict:
     # Step 3: Persist
     written = save_signals(signals)
 
+    companies_checked = client._request_count // 3  # ~3 requests per company
+    total_requests = client._request_count
+
+    print(f"[CH Events] Scan complete: {{'status': 'completed', "
+          f"'companies_checked': {companies_checked}, "
+          f"'total_api_requests': {total_requests}, "
+          f"'events_found': {len(events)}, "
+          f"'signals_generated': {len(signals)}, "
+          f"'signals_written': {written}}}")
+
     return {
         "status": "completed",
-        "companies_checked": client._request_count // 3,  # ~3 requests per company
+        "companies_checked": companies_checked,
+        "total_api_requests": total_requests,
         "events_found": len(events),
         "signals_generated": len(signals),
         "signals_written": written,

@@ -568,6 +568,13 @@ set('classification', params.classification)
   scanGazette: (daysBack = 30) => post<ScanResponse>(`/scan/gazette?days_back=${daysBack}`),
   scanAcs: () => post<ScanResponse>('/scan/acs'),
   scanChEvents: () => post<ScanResponse>('/scan/ch-events'),
+  scanPlanning: () => post<ScanResponse>('/scan/planning'),
+  scanCcs: () => post<ScanResponse>('/scan/ccs'),
+  scanHse: () => post<ScanResponse>('/scan/hse'),
+  scanInsolvency: () => post<ScanResponse>('/scan/insolvency'),
+  scanMartynsLaw: () => post<ScanResponse>('/scan/martyns-law'),
+  scanDigitalMarketplace: () => post<ScanResponse>('/scan/digital-marketplace'),
+  scanCharities: () => post<ScanResponse>('/scan/charities'),
 
   // Entity Resolution & Signal Actions
   resolveSignals: () => post<{ status: string }>('/resolve/signals'),

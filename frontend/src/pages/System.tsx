@@ -122,24 +122,72 @@ function ScansTab() {
 
   const history = historyData?.runs || []
 
-  const SCAN_JOBS: ScanJob[] = [
-    { id: 'tenders',    label: 'Tender Radar',          description: 'Contracts Finder — public sector tenders',       icon: '📋', scanType: 'tenders',    scanFn: () => api.scanTenders() },
-    { id: 'fts',        label: 'FTS Tenders',           description: 'Find a Tender Service — OJEU/above-threshold',   icon: '🔍', scanType: 'fts',        scanFn: () => api.scanFTS() },
-    { id: 'prospects',  label: 'Prospect Discovery',    description: 'Companies House — new prospect companies',        icon: '🏢', scanType: 'prospects',  scanFn: () => api.scanProspects() },
-    { id: 'competitors',label: 'Competitor Mapping',    description: 'Companies House — competitor landscape',          icon: '🎯', scanType: 'competitors',scanFn: () => api.scanCompetitors() },
-    { id: 'signals',    label: 'Signal Intelligence',   description: 'News & intent signals for tracked companies',     icon: '📡', scanType: 'signals',    scanFn: () => api.scanSignals() },
-    { id: 'crime',      label: 'Crime Intelligence',    description: 'Police UK — crime density near prospect sites',   icon: '🚨', scanType: 'crime',      scanFn: () => api.scanCrime() },
-    { id: 'gazette',    label: 'Gazette Insolvency',    description: 'The Gazette — insolvency notices & alerts',       icon: '⚖️', scanType: 'gazette',    scanFn: () => api.scanGazette() },
-    { id: 'ch_events',  label: 'Company Events',        description: 'Companies House streaming — director/filing changes', icon: '🔔', scanType: 'ch_events', scanFn: () => api.scanChEvents() },
-    { id: 'acs',        label: 'ACS Register',          description: 'SIA ACS — approved contractor scheme verification', icon: '🛡️', scanType: 'acs',       scanFn: () => api.scanAcs() },
+  // Organized into logical groups with all 16 scan types
+  const SCAN_GROUPS = [
+    {
+      title: 'Tenders',
+      jobs: [
+        { id: 'tenders',              label: 'Tender Radar',          description: 'Contracts Finder — public sector tenders',              icon: '📋', scanType: 'tenders',              scanFn: () => api.scanTenders() },
+        { id: 'fts',                  label: 'FTS Tenders',           description: 'Find a Tender Service — OJEU/above-threshold',         icon: '🔍', scanType: 'fts',                  scanFn: () => api.scanFTS() },
+        { id: 'digital-marketplace',  label: 'Digital Marketplace',   description: 'Digital Marketplace — G-Cloud & DOS frameworks',       icon: '🛒', scanType: 'digital-marketplace',  scanFn: () => api.scanDigitalMarketplace() },
+        { id: 'ccs',                  label: 'CCS Frameworks',        description: 'Crown Commercial Service — framework agreements',      icon: '👑', scanType: 'ccs',                  scanFn: () => api.scanCcs() },
+      ],
+    },
+    {
+      title: 'Companies',
+      jobs: [
+        { id: 'prospects',    label: 'Prospect Discovery',    description: 'Companies House — new prospect companies',              icon: '🏢', scanType: 'prospects',    scanFn: () => api.scanProspects() },
+        { id: 'competitors',  label: 'Competitor Mapping',    description: 'Companies House — competitor landscape',                icon: '🎯', scanType: 'competitors',  scanFn: () => api.scanCompetitors() },
+        { id: 'acs',          label: 'ACS Register',          description: 'SIA ACS — approved contractor scheme verification',    icon: '🛡️', scanType: 'acs',          scanFn: () => api.scanAcs() },
+      ],
+    },
+    {
+      title: 'Intelligence',
+      jobs: [
+        { id: 'signals',      label: 'Signal Intelligence',   description: 'News & intent signals for tracked companies',           icon: '📡', scanType: 'signals',      scanFn: () => api.scanSignals() },
+        { id: 'crime',        label: 'Crime Intelligence',    description: 'Police UK — crime density near prospect sites',         icon: '🚨', scanType: 'crime',        scanFn: () => api.scanCrime() },
+        { id: 'gazette',      label: 'Gazette Insolvency',    description: 'The Gazette — insolvency notices & alerts',             icon: '⚖️', scanType: 'gazette',      scanFn: () => api.scanGazette() },
+        { id: 'hse',          label: 'HSE Enforcement',       description: 'Health & Safety Executive — enforcement notices',       icon: '⚠️', scanType: 'hse',          scanFn: () => api.scanHse() },
+        { id: 'insolvency',   label: 'Insolvency Service',    description: 'Insolvency Service — company insolvency filings',      icon: '📉', scanType: 'insolvency',   scanFn: () => api.scanInsolvency() },
+      ],
+    },
+    {
+      title: 'Policy & Planning',
+      jobs: [
+        { id: 'martyns-law',  label: "Martyn's Law",          description: "Martyn's Law — terrorism protection compliance",       icon: '🏛️', scanType: 'martyns-law',  scanFn: () => api.scanMartynsLaw() },
+        { id: 'planning',     label: 'Planning Applications', description: 'Planning portal — new development applications',       icon: '🗺️', scanType: 'planning',     scanFn: () => api.scanPlanning() },
+        { id: 'charities',    label: 'Charity Commission',    description: 'Charity Commission — charity sector intelligence',     icon: '💝', scanType: 'charities',    scanFn: () => api.scanCharities() },
+      ],
+    },
+    {
+      title: 'Monitoring',
+      jobs: [
+        { id: 'ch_events',    label: 'Company Events',        description: 'Companies House streaming — director/filing changes',   icon: '🔔', scanType: 'ch_events',    scanFn: () => api.scanChEvents() },
+      ],
+    },
   ]
+
+  const SCAN_JOBS: ScanJob[] = SCAN_GROUPS.flatMap(g => g.jobs)
+
+  const [runAllProgress, setRunAllProgress] = useState('')
 
   const runAll = async () => {
     setRunningAll(true)
-    for (const job of SCAN_JOBS) {
-      try { await job.scanFn() } catch {}
+    const results: { label: string; ok: boolean }[] = []
+    for (let i = 0; i < SCAN_JOBS.length; i++) {
+      const job = SCAN_JOBS[i]
+      setRunAllProgress(`Running scan ${i + 1}/${SCAN_JOBS.length}: ${job.label}...`)
+      try {
+        await job.scanFn()
+        results.push({ label: job.label, ok: true })
+      } catch {
+        results.push({ label: job.label, ok: false })
+      }
       await new Promise(r => setTimeout(r, 500))
     }
+    const passed = results.filter(r => r.ok).length
+    const failed = results.filter(r => !r.ok).length
+    setRunAllProgress(`Complete: ${passed} passed, ${failed} failed`)
     setRunningAll(false)
     refetchHistory()
   }
@@ -188,12 +236,24 @@ function ScansTab() {
         </div>
       </div>
 
-      {/* Scan cards grid */}
-      <div className="grid grid-cols-1 gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
-        {SCAN_JOBS.map(job => (
-          <ScanCard key={job.id} job={job} history={history} />
-        ))}
-      </div>
+      {/* Run All progress */}
+      {runAllProgress && (
+        <p className="text-xs px-1" style={{ color: runningAll ? '#3b82f6' : '#22c55e' }}>
+          {runAllProgress}
+        </p>
+      )}
+
+      {/* Scan cards by group */}
+      {SCAN_GROUPS.map(group => (
+        <div key={group.title} className="space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#6b7280' }}>{group.title}</p>
+          <div className="grid grid-cols-1 gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))' }}>
+            {group.jobs.map(job => (
+              <ScanCard key={job.id} job={job} history={history} />
+            ))}
+          </div>
+        </div>
+      ))}
 
       {/* Scan History */}
       <div>

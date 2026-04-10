@@ -304,7 +304,9 @@ def get_filing_history(company_number, items_per_page=10):
 
 def is_london_company(company):
     """Check if a company is based in London area."""
-    address = company.get("registered_office_address", {}) or {}
+    # Companies House search endpoint returns address under "address" key,
+    # while full company profile uses "registered_office_address"
+    address = company.get("registered_office_address") or company.get("address") or {}
     locality = (address.get("locality") or "").lower()
     region = (address.get("region") or "").lower()
     postal_code = (address.get("postal_code") or "").upper()

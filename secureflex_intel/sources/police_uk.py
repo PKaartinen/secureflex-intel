@@ -114,8 +114,8 @@ def _api_get(path: str, params: Optional[Dict] = None, retries: int = 3) -> Opti
                 raw = resp.read().decode("utf-8")
                 return json.loads(raw)
         except HTTPError as e:
-            if e.code == 503:
-                # Police API returns 503 when no data for that area/date
+            if e.code in (502, 503):
+                # Police API returns 502/503 when no data for that area/date
                 return []
             if e.code == 404:
                 return None
@@ -190,12 +190,22 @@ class PoliceUKClient:
             print(f"[PoliceUK] Failed to load prospects: {e}")
             return []
 
-        # Use last 2 months for data
+        # Police UK data has ~2-3 month publication lag
+        # Query 2-4 months back to ensure we hit available data
         now = datetime.utcnow()
-        months = [
-            (now - timedelta(days=30)).strftime("%Y-%m"),
-            now.strftime("%Y-%m"),
-        ]
+        months = []
+        for months_back in range(2, 5):  # 2, 3, 4 months back
+            dt = now - timedelta(days=30 * months_back)
+            months.append(dt.strftime("%Y-%m"))
+
+        # Check latest available data month (optional enhancement)
+        try:
+            avail = _api_get("https://data.police.uk/api/crime-last-updated")
+            if avail and isinstance(avail, dict) and "date" in avail:
+                latest_month = avail["date"][:7]  # "YYYY-MM"
+                print(f"[PoliceUK] Latest available data: {latest_month}")
+        except Exception:
+            pass  # Fall back to the 2-4 months calculation
 
         all_crimes: List[Dict] = []
         processed = 0

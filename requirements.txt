@@ -14,3 +14,7 @@ anthropic>=0.30
 # Auth
 python-jose[cryptography]>=3.3
 bcrypt>=4.0
+# HTML parsing (used by SIA ACS, Digital Marketplace, Charity Commission scrapers)
+beautifulsoup4>=4.12
+# Fuzzy matching (used by entity resolver, gazette cross-referencing)
+rapidfuzz>=3.0
