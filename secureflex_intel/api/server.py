@@ -183,35 +183,201 @@ _scheduler_state = {
 
 
 def _run_scheduled_scans():
-    """Run all tender scans (CF + FTS) as a scheduled task."""
+    """
+    Run ALL intelligence scans as a scheduled task.
+
+    Execution order is deliberate:
+    1. Prospect discovery + competitor mapping (populates watchlists)
+    2. Tender / contract scans (Contracts Finder, FTS, Digital Marketplace, CCS)
+    3. Signal intelligence (job postings, news, Adzuna)
+    4. Regulatory / legislative (Gazette, HSE, Insolvency, Martyn's Law)
+    5. Downstream scans that depend on populated tables
+       (Crime intelligence, CH events, ACS register, Charities, Planning)
+    """
     _scheduler_state["running"] = True
     _scheduler_state["last_run"] = datetime.utcnow().isoformat()
-    print("[Scheduler] Starting scheduled scan...")
+    print("[Scheduler] Starting full scheduled scan...")
+
+    from secureflex_intel.db import record_scan_start, record_scan_complete
+
+    def _safe_scan(label, scan_type, scan_fn, *args, **kwargs):
+        """Run a single scan with error handling and history tracking."""
+        print(f"[Scheduler] Running {label}...")
+        run_id = record_scan_start(scan_type)
+        try:
+            result = scan_fn(*args, **kwargs)
+            # Normalise record count from various return shapes
+            if isinstance(result, dict):
+                count = (
+                    result.get("records_written", 0)
+                    or result.get("signals_written", 0)
+                    or result.get("prospects_written", 0)
+                    or result.get("contractors_written", 0)
+                    or result.get("crime_records_written", 0)
+                    or result.get("charities_found", 0)
+                    or result.get("tenders_found", 0)
+                    or result.get("total_results", 0)
+                    or 0
+                )
+            elif isinstance(result, list):
+                count = len(result)
+            else:
+                count = 0
+            record_scan_complete(run_id, count)
+            print(f"[Scheduler] {label} complete — {count} records")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Scheduler] {label} error: {e}")
+
     try:
-        # Run Contracts Finder scan
-        from secureflex_intel.sources.contracts_finder import run_scan as cf_scan
-        from secureflex_intel.db import record_scan_start, record_scan_complete
-        run_id = record_scan_start("tenders")
+        # ── 1. Prospect Discovery ─────────────────────────────────────────
         try:
-            results = cf_scan(days_back=settings.tender_days_back)
-            record_scan_complete(run_id, len(results))
+            from secureflex_intel.sources.companies_house import main as ch_main
+            import sys
+
+            print("[Scheduler] Running Prospect Discovery...")
+            run_id = record_scan_start("prospects")
+            try:
+                sys.argv = ["ch_prospector", "--mode", "clients", "--region", "london", "--max-results", "200"]
+                ch_main()
+            except SystemExit:
+                pass
+            record_scan_complete(run_id, 0)  # CH main handles its own DB writes
+            print("[Scheduler] Prospect Discovery complete")
         except Exception as e:
             record_scan_complete(run_id, 0, str(e))
-            print(f"[Scheduler] CF scan error: {e}")
+            print(f"[Scheduler] Prospect Discovery error: {e}")
 
-        # Run FTS scan
-        from secureflex_intel.sources.find_a_tender import run_scan as fts_scan
-        run_id = record_scan_start("fts")
+        # ── 2. Competitor Mapping ─────────────────────────────────────────
         try:
-            results = fts_scan(days_back=settings.fts_days_back)
-            record_scan_complete(run_id, len(results))
+            from secureflex_intel.sources.companies_house import main as ch_main
+            import sys
+
+            print("[Scheduler] Running Competitor Mapping...")
+            run_id = record_scan_start("competitors")
+            try:
+                sys.argv = ["ch_prospector", "--mode", "competitors", "--region", "london"]
+                ch_main()
+            except SystemExit:
+                pass
+            record_scan_complete(run_id, 0)
+            print("[Scheduler] Competitor Mapping complete")
         except Exception as e:
             record_scan_complete(run_id, 0, str(e))
-            print(f"[Scheduler] FTS scan error: {e}")
+            print(f"[Scheduler] Competitor Mapping error: {e}")
 
-        print("[Scheduler] Scheduled scan complete")
+        # ── 3. Contracts Finder ───────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.contracts_finder import run_scan as cf_scan
+            _safe_scan("Contracts Finder", "tenders", cf_scan, days_back=settings.tender_days_back)
+        except Exception as e:
+            print(f"[Scheduler] Contracts Finder import error: {e}")
+
+        # ── 4. Find a Tender Service ──────────────────────────────────────
+        try:
+            from secureflex_intel.sources.find_a_tender import run_scan as fts_scan
+            _safe_scan("Find a Tender", "fts", fts_scan, days_back=settings.fts_days_back)
+        except Exception as e:
+            print(f"[Scheduler] FTS import error: {e}")
+
+        # ── 5. Digital Marketplace ────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.digital_marketplace import run_scan as dm_scan
+            _safe_scan("Digital Marketplace", "digital_marketplace", dm_scan)
+        except Exception as e:
+            print(f"[Scheduler] Digital Marketplace import error: {e}")
+
+        # ── 6. CCS Frameworks ─────────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.ccs_frameworks import run_scan as ccs_scan
+            _safe_scan("CCS Frameworks", "ccs", ccs_scan)
+        except Exception as e:
+            print(f"[Scheduler] CCS import error: {e}")
+
+        # ── 7. Signal Intelligence ────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.signals import main as signal_main
+            import sys
+
+            print("[Scheduler] Running Signal Intelligence...")
+            run_id = record_scan_start("signals")
+            try:
+                sys.argv = ["signal_scanner"]
+                signal_main()
+            except SystemExit:
+                pass
+            record_scan_complete(run_id, 0)  # signals main handles its own DB writes
+            print("[Scheduler] Signal Intelligence complete")
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
+            print(f"[Scheduler] Signal Intelligence error: {e}")
+
+        # ── 8. Gazette Insolvency ─────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.gazette import run_scan as gazette_scan
+            _safe_scan("Gazette", "gazette", gazette_scan, days_back=30)
+        except Exception as e:
+            print(f"[Scheduler] Gazette import error: {e}")
+
+        # ── 9. HSE Enforcement ────────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.hse import run_hse_scan
+            _safe_scan("HSE Enforcement", "hse", run_hse_scan)
+        except Exception as e:
+            print(f"[Scheduler] HSE import error: {e}")
+
+        # ── 10. Insolvency ────────────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.hse import run_insolvency_scan
+            _safe_scan("Insolvency", "insolvency", run_insolvency_scan)
+        except Exception as e:
+            print(f"[Scheduler] Insolvency import error: {e}")
+
+        # ── 11. Martyn's Law ──────────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.martyns_law import run_scan as ml_scan
+            _safe_scan("Martyn's Law", "martyns_law", ml_scan)
+        except Exception as e:
+            print(f"[Scheduler] Martyn's Law import error: {e}")
+
+        # ── 12. Crime Intelligence ────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.police_uk import run_scan as police_scan
+            _safe_scan("Crime Intelligence", "crime", police_scan)
+        except Exception as e:
+            print(f"[Scheduler] Crime import error: {e}")
+
+        # ── 13. Companies House Events ────────────────────────────────────
+        try:
+            from secureflex_intel.sources.ch_streaming import run_scan as ch_events_scan
+            _safe_scan("CH Events", "ch_events", ch_events_scan)
+        except Exception as e:
+            print(f"[Scheduler] CH Events import error: {e}")
+
+        # ── 14. ACS Register ──────────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.sia_acs import run_scan as acs_scan
+            _safe_scan("ACS Register", "acs", acs_scan, cross_ref_ch=True)
+        except Exception as e:
+            print(f"[Scheduler] ACS import error: {e}")
+
+        # ── 15. Charity Commission ────────────────────────────────────────
+        try:
+            from secureflex_intel.sources.charity_commission import run_scan as charities_scan
+            _safe_scan("Charities", "charities", charities_scan)
+        except Exception as e:
+            print(f"[Scheduler] Charities import error: {e}")
+
+        # ── 16. Planning Applications ─────────────────────────────────────
+        try:
+            from secureflex_intel.sources.planning import run_scan as planning_scan
+            _safe_scan("Planning", "planning", planning_scan, days_back=30)
+        except Exception as e:
+            print(f"[Scheduler] Planning import error: {e}")
+
+        print("[Scheduler] Full scheduled scan complete")
     except Exception as e:
-        print(f"[Scheduler] Error: {e}")
+        print(f"[Scheduler] Fatal error: {e}")
     finally:
         _scheduler_state["running"] = False
 
@@ -2253,15 +2419,20 @@ def trigger_tender_scan(
     current_user: dict = Depends(get_current_user)):
     """Trigger a new tender scan in the background."""
     def run_scan():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
         from secureflex_intel.sources.contracts_finder import main as tender_main
         import sys
+        run_id = record_scan_start("tenders")
         sys.argv = ["tender_radar", "--days-back", str(days_back)]
         if add_to_pipeline:
             sys.argv.append("--add-to-pipeline")
         try:
             tender_main()
+            record_scan_complete(run_id, 0)
         except SystemExit:
-            pass
+            record_scan_complete(run_id, 0)
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
 
     background_tasks.add_task(run_scan)
     return {"status": "scan_started", "type": "tenders", "days_back": days_back}
@@ -2293,13 +2464,18 @@ def trigger_prospect_scan(
     current_user: dict = Depends(get_current_user)):
     """Trigger a new Companies House prospect scan."""
     def run_scan():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
         from secureflex_intel.sources.companies_house import main as ch_main
         import sys
+        run_id = record_scan_start("prospects")
         sys.argv = ["ch_prospector", "--mode", "clients", "--region", region, "--max-results", str(max_results)]
         try:
             ch_main()
+            record_scan_complete(run_id, 0)
         except SystemExit:
-            pass
+            record_scan_complete(run_id, 0)
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
 
     background_tasks.add_task(run_scan)
     return {"status": "scan_started", "type": "prospects", "region": region}
@@ -2309,13 +2485,18 @@ def trigger_prospect_scan(
 def trigger_signal_scan(background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     """Trigger a new intent signal scan."""
     def run_scan():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
         from secureflex_intel.sources.signals import main as signal_main
         import sys
+        run_id = record_scan_start("signals")
         sys.argv = ["signal_scanner"]
         try:
             signal_main()
+            record_scan_complete(run_id, 0)
         except SystemExit:
-            pass
+            record_scan_complete(run_id, 0)
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
 
     background_tasks.add_task(run_scan)
     return {"status": "scan_started", "type": "signals"}
@@ -2328,13 +2509,18 @@ def trigger_competitor_scan(
     current_user: dict = Depends(get_current_user)):
     """Trigger a new competitor scan."""
     def run_scan():
+        from secureflex_intel.db import record_scan_start, record_scan_complete
         from secureflex_intel.sources.companies_house import main as ch_main
         import sys
+        run_id = record_scan_start("competitors")
         sys.argv = ["ch_prospector", "--mode", "competitors", "--region", region]
         try:
             ch_main()
+            record_scan_complete(run_id, 0)
         except SystemExit:
-            pass
+            record_scan_complete(run_id, 0)
+        except Exception as e:
+            record_scan_complete(run_id, 0, str(e))
 
     background_tasks.add_task(run_scan)
     return {"status": "scan_started", "type": "competitors", "region": region}
