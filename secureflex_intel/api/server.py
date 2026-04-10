@@ -172,6 +172,15 @@ app.add_middleware(
 
 # ── Auto-Scan Scheduler State ────────────────────────────────────────────────
 
+# Allowed scan frequency presets (hours)
+ALLOWED_SCAN_INTERVALS = {
+    6:   "Every 6 hours",
+    12:  "Every 12 hours",
+    24:  "Daily",
+    48:  "Every 2 days",
+    168: "Weekly",
+}
+
 _scheduler_state = {
     "enabled": False,
     "interval_hours": 6,
@@ -2530,27 +2539,48 @@ def trigger_competitor_scan(
 
 @app.get("/api/scan/schedule")
 def get_scan_schedule(current_user: dict = Depends(get_current_user)):
-    """Get the current auto-scan schedule status."""
+    """Get the current auto-scan schedule status and available frequency options."""
     return {
         "enabled": _scheduler_state["enabled"],
         "interval_hours": _scheduler_state["interval_hours"],
+        "interval_label": ALLOWED_SCAN_INTERVALS.get(_scheduler_state["interval_hours"], f"Every {_scheduler_state['interval_hours']}h"),
         "last_run": _scheduler_state["last_run"],
         "next_run": _scheduler_state["next_run"],
         "running": _scheduler_state["running"],
+        "available_intervals": [
+            {"hours": h, "label": lbl} for h, lbl in sorted(ALLOWED_SCAN_INTERVALS.items())
+        ],
     }
 
 
 @app.post("/api/scan/schedule")
 def toggle_scan_schedule(payload: Dict[str, Any] = None, current_user: dict = Depends(get_current_user)):
-    """Toggle auto-scan on/off. Optionally set interval_hours."""
+    """Toggle auto-scan on/off and/or change scan frequency.
+
+    Accepts JSON body:
+        {"enabled": true/false, "interval_hours": 6|12|24|48|168}
+    """
     if payload is None:
         payload = {}
+
+    # Validate interval_hours if provided
+    if "interval_hours" in payload:
+        requested = int(payload["interval_hours"])
+        if requested not in ALLOWED_SCAN_INTERVALS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid interval. Allowed values: {sorted(ALLOWED_SCAN_INTERVALS.keys())}",
+            )
+        _scheduler_state["interval_hours"] = requested
+        # If scheduler is already running, restart it with the new interval
+        if _scheduler_state["enabled"] and "enabled" not in payload:
+            _stop_scheduler()
+            _start_scheduler()
+            return get_scan_schedule()
 
     # Toggle
     if "enabled" in payload:
         if payload["enabled"]:
-            if "interval_hours" in payload:
-                _scheduler_state["interval_hours"] = int(payload["interval_hours"])
             _start_scheduler()
         else:
             _stop_scheduler()
@@ -2559,8 +2589,6 @@ def toggle_scan_schedule(payload: Dict[str, Any] = None, current_user: dict = De
         if _scheduler_state["enabled"]:
             _stop_scheduler()
         else:
-            if "interval_hours" in payload:
-                _scheduler_state["interval_hours"] = int(payload["interval_hours"])
             _start_scheduler()
 
     return get_scan_schedule()
